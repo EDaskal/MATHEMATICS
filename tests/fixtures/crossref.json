@@ -1,0 +1,21 @@
+{
+ "source_label": "23.2",
+ "stem": "Δίνεται το πολυώνυμο:\n$$\\mathrm{P}(x) = \\alpha x^3 + (\\beta - 1)x^2 - 3x - 2\\beta + 6$$\nόπου $\\alpha, \\beta$ πραγματικοί αριθμοί.",
+ "items": [
+  {
+   "label": "α",
+   "text": "Αν το $x - 1$ είναι παράγοντας του $\\mathrm{P}(x)$ και το υπόλοιπο της διαίρεσης του $\\mathrm{P}(x)$ με το $x + 1$ είναι ίσο με $2$, να αποδείξετε ότι $\\alpha = 2$ και $\\beta = 4$.",
+   "choices": null,
+   "items": []
+  },
+  {
+   "label": "β",
+   "text": "Για τις τιμές των $\\alpha$ και $\\beta$ του ερωτήματος [[α]] να λύσετε την εξίσωση $\\mathrm{P}(x) = 0$.",
+   "choices": null,
+   "items": []
+  }
+ ],
+ "closing": "",
+ "figure": null,
+ "uncertain": []
+}

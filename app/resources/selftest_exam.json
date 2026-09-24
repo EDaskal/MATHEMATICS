@@ -1,0 +1,36 @@
+{
+  "title": "ΔΙΑΓΩΝΙΣΜΑ ΑΥΤΟΕΛΕΓΧΟΥ",
+  "subtitle": "ΔΟΚΙΜΗ ΕΓΚΑΤΑΣΤΑΣΗΣ",
+  "date": "",
+  "footer": "Αυτοέλεγχος\tΓεννήτρια Διαγωνισμάτων",
+  "themes": [
+    {
+      "points": [50],
+      "exercises": [
+        {
+          "stem": "Δίνεται η συνάρτηση $f(x)=\\dfrac{\\mathrm{ημ}x}{1-\\mathrm{συν}x}$ και το σύστημα\n$$\\begin{cases} x+y=3 \\\\ x-y=1 \\end{cases}$$",
+          "items": [
+            {"label": "α", "text": "Να βρείτε την ορίζουσα $D=\\begin{vmatrix} 1 & 1 \\\\ 1 & -1 \\end{vmatrix}$.", "choices": null, "items": []}
+          ],
+          "closing": "",
+          "figure_spec": "{\"width_cm\": 5, \"axes\": {\"x\": [-3, 3], \"y\": [-1, 5], \"ticks_x\": [-2, 2], \"ticks_y\": [4], \"labels\": true, \"origin\": \"O\"}, \"elements\": [{\"type\": \"line\", \"name\": \"ε\", \"through\": [[-2, 0], [0, 2]], \"label\": \"ε\"}, {\"type\": \"point\", \"name\": \"A\", \"at\": [1, 3], \"label\": \"A\"}], \"checks\": [{\"type\": \"on_line\", \"point\": \"A\", \"line\": \"ε\"}]}"
+        }
+      ]
+    },
+    {
+      "points": [25, 25],
+      "exercises": [
+        {
+          "stem": "Σε καθεμία από τις παρακάτω ερωτήσεις να επιλέξετε τη σωστή απάντηση.",
+          "items": [
+            {"label": "i", "text": "Ο αριθμός $8$ είναι ίσος με:", "choices": {"columns": 4, "options": ["$100^{\\log 4}$", "$e^{\\log 8}$", "$1000^{\\log 2}$", "$\\sqrt{e^{\\ln 16}}$"]}, "items": []},
+            {"label": "ii", "text": "Για τις τιμές του ερωτήματος [[i]]:", "choices": null, "items": [
+              {"label": "α", "text": "$\\log_{\\alpha}\\theta^{\\kappa}=\\kappa\\log_{\\alpha}\\theta$", "choices": null, "items": []}
+            ]}
+          ],
+          "closing": ""
+        }
+      ]
+    }
+  ]
+}

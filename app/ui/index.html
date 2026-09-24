@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Γεννήτρια Διαγωνισμάτων</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">∑</span>
+    <span>Γεννήτρια Διαγωνισμάτων</span>
+  </div>
+  <nav class="steps" id="steps">
+    <button data-tab="setup" class="active"><span class="n">1</span> Διαγώνισμα</button>
+    <button data-tab="review"><span class="n">2</span> Έλεγχος</button>
+    <button data-tab="done"><span class="n">3</span> Word</button>
+  </nav>
+  <button class="icon-btn" id="btn-settings" title="Ρυθμίσεις">⚙ Ρυθμίσεις</button>
+</header>
+
+<main>
+  <!-- ============================================================ 1. Διαγώνισμα -->
+  <section id="tab-setup" class="tab active">
+    <div class="card">
+      <h2>Στοιχεία διαγωνίσματος</h2>
+      <div class="grid2">
+        <label>Τίτλος
+          <input id="f-title" type="text" placeholder="π.χ. ΔΙΑΓΩΝΙΣΜΑ Β’ ΛΥΚΕΙΟΥ ΑΛΓΕΒΡΑ">
+        </label>
+        <label>Υπότιτλος (ενότητα)
+          <input id="f-subtitle" type="text" placeholder="π.χ. ΕΚΘΕΤΙΚΕΣ – ΛΟΓΑΡΙΘΜΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ">
+        </label>
+        <label>Ημερομηνία
+          <span class="row">
+            <input id="f-date" type="text" placeholder="κενό = γραμμή για συμπλήρωση">
+            <button class="btn small" id="btn-today" type="button">Σήμερα</button>
+          </span>
+        </label>
+        <label>Κείμενο υποσέλιδου
+          <input id="f-footer" type="text" placeholder="κενό = όπως στο πρότυπο">
+        </label>
+        <label>Πλήθος θεμάτων
+          <select id="f-nthemes">
+            <option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option>
+          </select>
+        </label>
+        <div class="hint-box" id="template-hint"></div>
+      </div>
+    </div>
+
+    <div class="themes" id="themes"></div>
+
+    <div class="actionbar">
+      <div class="total" id="total-setup"></div>
+      <div class="spacer"></div>
+      <button class="btn primary big" id="btn-transcribe">Μεταγραφή θεμάτων →</button>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2. Έλεγχος -->
+  <section id="tab-review" class="tab">
+    <div class="intro-note">
+      Ελέγξτε κάθε θέμα: αριστερά το πρωτότυπο, δεξιά η μεταγραφή. Οι αλλαγές στο κείμενο φαίνονται αμέσως
+      στην προεπισκόπηση. Οι εξισώσεις γράφονται μέσα σε <code>$…$</code>.
+    </div>
+    <div id="review"></div>
+    <div class="actionbar">
+      <div class="total" id="total-review"></div>
+      <div class="spacer"></div>
+      <button class="btn" id="btn-back">← Θέματα</button>
+      <button class="btn primary big" id="btn-build">Δημιουργία Word</button>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3. Word -->
+  <section id="tab-done" class="tab">
+    <div class="card done-card" id="done"></div>
+  </section>
+</main>
+
+<!-- ============================================================ Ρυθμίσεις -->
+<div class="modal" id="settings" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2>Ρυθμίσεις</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+
+    <h3>Σύνδεση με τον Claude</h3>
+    <div class="radio-group" id="s-provider"></div>
+
+    <div class="sub" id="s-agent">
+      <p class="muted">Χρησιμοποιεί τη συνδρομή Claude (Pro/Max). Πατήστε «Σύνδεση με συνδρομή»: ανοίγει παράθυρο,
+        συνδέεστε στον browser και εμφανίζεται ένα μακρύ token. Αντιγράψτε το και επικολλήστε το εδώ.</p>
+      <div class="status-line" id="s-oauth-status"></div>
+      <div class="row">
+        <button class="btn" id="s-setup-token">Σύνδεση με συνδρομή…</button>
+      </div>
+      <div class="row">
+        <input id="s-oauth" type="password" placeholder="Επικόλληση token (sk-ant-oat…)" autocomplete="off">
+        <button class="btn" id="s-oauth-save">Αποθήκευση</button>
+        <button class="btn ghost" id="s-oauth-del">Διαγραφή</button>
+      </div>
+    </div>
+
+    <div class="sub" id="s-api">
+      <p class="muted">Χρεώνεται ανά χρήση από το υπόλοιπο του λογαριασμού στο Claude Console.</p>
+      <div class="status-line" id="s-key-status"></div>
+      <div class="row">
+        <input id="s-key" type="password" placeholder="Κλειδί API (sk-ant-api…)" autocomplete="off">
+        <button class="btn" id="s-key-save">Αποθήκευση</button>
+        <button class="btn ghost" id="s-key-del">Διαγραφή</button>
+      </div>
+      <details>
+        <summary>Αντιστοίχιση σύντομων ονομάτων μοντέλου για το API</summary>
+        <div id="s-aliases" class="aliases"></div>
+      </details>
+    </div>
+
+    <div class="grid2">
+      <label>Μοντέλο
+        <input id="s-model" list="models" type="text">
+        <datalist id="models"></datalist>
+        <span class="muted small">Τα opus / sonnet ακολουθούν αυτόματα το νεότερο μοντέλο.</span>
+      </label>
+      <label>Παράλληλες μεταγραφές
+        <input id="s-parallel" type="number" min="1" max="6">
+      </label>
+    </div>
+    <div class="row">
+      <button class="btn" id="s-test">Δοκιμή σύνδεσης</button>
+      <span id="s-test-result" class="muted"></span>
+    </div>
+
+    <h3>Word</h3>
+    <div class="kv"><span>Πρότυπο</span><span id="s-template"></span></div>
+    <div class="row">
+      <button class="btn" id="s-template-choose">Επιλογή διαγωνίσματος ως πρότυπο…</button>
+      <button class="btn ghost" id="s-template-reset">Ενσωματωμένο πρότυπο</button>
+    </div>
+    <p class="muted small">Από το πρότυπο κρατιούνται κεφαλίδα, υποσέλιδο, περιθώρια και γραμματοσειρές. Το περιεχόμενό του αγνοείται.</p>
+    <div class="kv"><span>Φάκελος αποθήκευσης</span><span id="s-outdir"></span></div>
+    <div class="row"><button class="btn" id="s-outdir-choose">Αλλαγή φακέλου…</button></div>
+    <div class="grid2">
+      <label>Υπο-ερωτήματα
+        <select id="s-sublevel"><option value="roman">i), ii), iii)</option><option value="bullet">Κουκκίδες</option></select>
+      </label>
+      <label>Γραμμή «Μονάδες»
+        <select id="s-align"><option value="right">Δεξιά</option><option value="left">Αριστερά</option></select>
+      </label>
+    </div>
+
+    <h3>Κανόνες μεταγραφής</h3>
+    <p class="muted small">Οι οδηγίες που παίρνει ο Claude. Αλλάζουν χωρίς νέα εγκατάσταση.</p>
+    <div class="row">
+      <button class="btn" id="s-rules-open">Επεξεργασία κανόνων</button>
+      <button class="btn ghost" id="s-rules-reset">Επαναφορά αρχικών</button>
+      <span id="s-rules-status" class="muted small"></span>
+    </div>
+
+    <div class="modal-foot">
+      <span class="muted small" id="s-version"></span>
+      <div class="spacer"></div>
+      <button class="btn primary" id="s-save">Αποθήκευση & κλείσιμο</button>
+    </div>
+  </div>
+</div>
+
+<!-- μεγέθυνση εικόνας -->
+<div class="lightbox" id="lightbox" hidden><img alt=""></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/katex/katex.min.js"></script>
+<script src="vendor/marked.umd.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

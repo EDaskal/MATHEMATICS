@@ -1,0 +1,78 @@
+{
+ "source_label": "Θέμα 1ο",
+ "stem": "",
+ "items": [
+  {
+   "label": "α",
+   "text": "Αν $0<\\alpha\\neq 1$, $\\theta>0$ και $\\kappa\\in\\mathbb{R}$, να αποδείξετε ότι:\n$$\\log_{\\alpha}\\theta^{\\kappa}=\\kappa\\cdot\\log_{\\alpha}\\theta$$",
+   "choices": null,
+   "items": []
+  },
+  {
+   "label": "β",
+   "text": "Σε καθεμία από τις παρακάτω ερωτήσεις να επιλέξετε τη σωστή απάντηση.",
+   "choices": null,
+   "items": [
+    {
+     "label": "i",
+     "text": "Ποια από τις παρακάτω συναρτήσεις είναι γνησίως φθίνουσα;",
+     "choices": {
+      "columns": 2,
+      "options": [
+       "$f(x)=\\left(\\dfrac{4}{3}\\right)^{x}$",
+       "$f(x)=\\left(\\dfrac{2}{5}\\right)^{-x}$",
+       "$f(x)=(\\ln 3)^{x}$",
+       "$f(x)=\\left(\\dfrac{7}{6}\\right)^{-x}$"
+      ]
+     },
+     "items": []
+    },
+    {
+     "label": "ii",
+     "text": "Ποιος από τους παρακάτω αριθμούς είναι αρνητικός;",
+     "choices": {
+      "columns": 4,
+      "options": [
+       "$\\ln 2$",
+       "$\\log 1$",
+       "$\\ln\\dfrac{3}{5}$",
+       "$\\log\\dfrac{9}{7}$"
+      ]
+     },
+     "items": []
+    },
+    {
+     "label": "iii",
+     "text": "Ο αριθμός $8$ είναι ίσος με:",
+     "choices": {
+      "columns": 4,
+      "options": [
+       "$100^{\\log 4}$",
+       "$e^{\\log 8}$",
+       "$1000^{\\log 2}$",
+       "$\\sqrt{e^{\\ln 16}}$"
+      ]
+     },
+     "items": []
+    },
+    {
+     "label": "iv",
+     "text": "Αν $0<\\theta\\neq 1$, τότε ο αριθμός $\\log\\theta$ ισούται με:",
+     "choices": {
+      "columns": 4,
+      "options": [
+       "$\\dfrac{\\ln\\theta}{\\ln e}$",
+       "$\\dfrac{\\ln\\theta}{\\ln 10}$",
+       "$\\dfrac{\\ln 10}{\\ln\\theta}$",
+       "$\\dfrac{\\ln\\theta}{\\log e}$"
+      ]
+     },
+     "items": []
+    }
+   ]
+  }
+ ],
+ "closing": "",
+ "figure": null,
+ "uncertain": []
+}

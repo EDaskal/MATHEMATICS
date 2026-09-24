@@ -1,0 +1,84 @@
+{
+ "source_label": "Θέμα 1ο",
+ "stem": "",
+ "items": [
+  {
+   "label": "Α",
+   "text": "Δίνεται το γραμμικό σύστημα $\\begin{cases} \\alpha x + \\beta y = \\gamma \\\\ \\alpha' x + \\beta' y = \\gamma' \\end{cases}$.",
+   "choices": null,
+   "items": [
+    {
+     "label": "α",
+     "text": "Ποιες είναι οι ορίζουσες $\\mathrm{D}$, $\\mathrm{D}_x$ και $\\mathrm{D}_y$ του συστήματος;",
+     "choices": null,
+     "items": []
+    },
+    {
+     "label": "β",
+     "text": "Τι ισχύει για το παραπάνω σύστημα, όταν:",
+     "choices": null,
+     "items": [
+      {
+       "label": "i",
+       "text": "$\\mathrm{D} \\neq 0$;",
+       "choices": null,
+       "items": []
+      },
+      {
+       "label": "ii",
+       "text": "$\\mathrm{D} = 0$;",
+       "choices": null,
+       "items": []
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "label": "Β",
+   "text": "Να χαρακτηρίσετε ως σωστή (Σ) ή λανθασμένη (Λ) καθεμία από τις παρακάτω προτάσεις:",
+   "choices": null,
+   "items": [
+    {
+     "label": "α",
+     "text": "Η εξίσωση $\\alpha x + \\beta y = \\gamma$ παριστάνει ευθεία για οποιεσδήποτε τιμές των $\\alpha$ και $\\beta$.",
+     "choices": null,
+     "items": []
+    },
+    {
+     "label": "β",
+     "text": "Ένα ομογενές γραμμικό σύστημα δεν είναι ποτέ αδύνατο.",
+     "choices": null,
+     "items": []
+    },
+    {
+     "label": "γ",
+     "text": "Αν σε ένα γραμμικό σύστημα $2 \\times 2$ ισχύει ότι $\\mathrm{D} < 0$, τότε το σύστημα έχει μοναδική λύση.",
+     "choices": null,
+     "items": []
+    },
+    {
+     "label": "δ",
+     "text": "Η ορίζουσα $\\mathrm{D}$ του συστήματος $\\begin{cases} \\alpha x + \\beta y = \\gamma \\\\ \\alpha' y + \\beta' x = \\gamma' \\end{cases}$ είναι $\\mathrm{D} = \\begin{vmatrix} \\alpha & \\beta \\\\ \\alpha' & \\beta' \\end{vmatrix}$.",
+     "choices": null,
+     "items": []
+    },
+    {
+     "label": "ε",
+     "text": "Οι ευθείες $\\varepsilon_1: 4x + 0 \\cdot y = 7$ και $\\varepsilon_2: 0 \\cdot x - 21y = 13$ είναι κάθετες.",
+     "choices": null,
+     "items": []
+    },
+    {
+     "label": "στ",
+     "text": "Ο κύκλος με κέντρο την αρχή των αξόνων και ακτίνα $\\rho = 4$ έχει εξίσωση $x^2 + y^2 = 4$.",
+     "choices": null,
+     "items": []
+    }
+   ]
+  }
+ ],
+ "closing": "",
+ "figure": null,
+ "uncertain": []
+}
