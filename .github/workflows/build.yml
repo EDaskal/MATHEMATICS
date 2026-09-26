@@ -26,9 +26,9 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -36,7 +36,9 @@ jobs:
       - name: Εξαρτήσεις
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          # --only-binary: ποτέ «πηγαίος κώδικας» για το Agent SDK — μόνο το έτοιμο πακέτο Windows με το Claude CLI
+          pip install --only-binary=claude-agent-sdk -r requirements.txt pyinstaller
+          python -c "import claude_agent_sdk, pathlib, sys; p = pathlib.Path(claude_agent_sdk.__file__).parent / '_bundled' / 'claude.exe'; print('Claude CLI:', p, p.exists()); sys.exit(0 if p.exists() else 1)"
 
       - name: Pandoc
         shell: pwsh
@@ -102,7 +104,7 @@ jobs:
           & $iscc "/DAppVersion=$env:APP_VERSION" build/installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Diagonismata-Setup-${{ env.APP_VERSION }}
           path: build/dist/Diagonismata-Setup-*.exe
