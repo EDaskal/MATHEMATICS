@@ -207,8 +207,14 @@ def _bounds(spec: dict) -> tuple[float, float, float, float]:
     return min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
 
 
-def render(spec: dict) -> tuple[bytes, bytes, float]:
-    """Επιστρέφει (svg, png, πλάτος σε cm)."""
+def render(spec: dict, font: str | None = None) -> tuple[bytes, bytes, float]:
+    """Επιστρέφει (svg, png, πλάτος σε cm). `font`: γραμματοσειρά ετικετών (ίδια με το κείμενο)."""
+    serif = ([font] if font else []) + ["Times New Roman", "DejaVu Serif"]
+    with plt.rc_context({"font.serif": serif}):
+        return _render(spec)
+
+
+def _render(spec: dict) -> tuple[bytes, bytes, float]:
     xmin, xmax, ymin, ymax = _bounds(spec)
     if xmax <= xmin or ymax <= ymin:
         raise FigureError("Μη έγκυρο εύρος αξόνων στο σχήμα.")
@@ -345,10 +351,10 @@ def render(spec: dict) -> tuple[bytes, bytes, float]:
     return svg_buf.getvalue(), png_buf.getvalue(), real_w
 
 
-def render_to_files(spec_json: str, out_base: Path) -> dict:
+def render_to_files(spec_json: str, out_base: Path, font: str | None = None) -> dict:
     """Σχεδιάζει και γράφει out_base.svg / out_base.png. Επιστρέφει πληροφορίες και προειδοποιήσεις."""
     spec = parse_spec(spec_json)
-    svg, png, width = render(spec)
+    svg, png, width = render(spec, font)
     out_base.parent.mkdir(parents=True, exist_ok=True)
     svg_p, png_p = out_base.with_suffix(".svg"), out_base.with_suffix(".png")
     svg_p.write_bytes(svg)

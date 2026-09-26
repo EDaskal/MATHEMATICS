@@ -66,6 +66,20 @@ def run(report_path: str | None = None) -> int:
 
     check("anthropic", anthropic_sdk)
 
+    def version_docs():
+        from . import __version__
+        from .paths import build_info, doc_path
+        from .updates import parse_version
+
+        missing = [n for n in ("CHANGELOG.md", "docs/user-guide.md") if not doc_path(n)]
+        if missing:
+            raise RuntimeError("λείπουν: " + ", ".join(missing))
+        if parse_version(__version__) == (0, 0, 0):
+            raise RuntimeError("άκυρος αριθμός έκδοσης")
+        return f"{__version__}, build {build_info().get('run', 'τοπικό')}"
+
+    check("version-docs", version_docs)
+
     def build():
         from .docx_build import build_docx
         from .figures import render_to_files
@@ -81,8 +95,10 @@ def run(report_path: str | None = None) -> int:
                         if info["warnings"]:
                             raise RuntimeError("έλεγχος σχήματος: " + "; ".join(info["warnings"]))
                         ex["figure_render"] = info
+            from .docx_build import PageSetup
+
             out = tdp / "selftest.docx"
-            res = build_docx(exam, out, footer_text=exam["footer"])
+            res = build_docx(exam, out, setup=PageSetup("Cambria", 12, "Β’ ΛΥΚΕΙΟΥ ΑΛΓΕΒΡΑ", "Αυτοέλεγχος"))
             expected, found = res["math"]
             if expected <= 0 or expected != found:
                 raise RuntimeError(f"εξισώσεις: γράφτηκαν {expected}, διαβάστηκαν {found}")
@@ -93,9 +109,15 @@ def run(report_path: str | None = None) -> int:
                 doc = z.read("word/document.xml").decode("utf-8")
                 if "svgBlip" not in doc:
                     raise RuntimeError("λείπει το svgBlip")
-                footer = "".join(z.read(n).decode("utf-8") for n in names if n.startswith("word/footer"))
-                if "Αυτοέλεγχος" not in footer:
-                    raise RuntimeError("δεν άλλαξε το υποσέλιδο")
+                footer = z.read("word/footer_exam.xml").decode("utf-8")
+                if "Επιμέλεια: Αυτοέλεγχος" not in footer or "Β’ ΛΥΚΕΙΟΥ" not in footer:
+                    raise RuntimeError("λάθος υποσέλιδο")
+                header = z.read("word/header_exam.xml").decode("utf-8")
+                if "NUMPAGES" not in header or 'w:val="center"' not in header:
+                    raise RuntimeError("λάθος κεφαλίδα")
+                styles = z.read("word/styles.xml").decode("utf-8")
+                if 'w:ascii="Cambria"' not in styles:
+                    raise RuntimeError("δεν εφαρμόστηκε η γραμματοσειρά")
             return f"{expected} εξισώσεις, {len(res['warnings'])} προειδοποιήσεις"
 
     check("build-docx", build)

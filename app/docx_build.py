@@ -4,7 +4,8 @@
 1. στοίχιση/έντονα στις ειδικές παραγράφους (τίτλος, «ΘΕΜΑΤΑ», μονάδες, σχήματα),
 2. αφαίρεση περιγραμμάτων από τους πίνακες,
 3. ενσωμάτωση των σχημάτων ως SVG (το PNG μένει ως εφεδρικό) → «Μετατροπή σε σχήμα» στο Word,
-4. αλλαγή κειμένου υποσέλιδου (αν δόθηκε),
+4. ίδια γραμματοσειρά/μέγεθος παντού και δική μας κεφαλίδα («Σελίδα X από Y» στο κέντρο)
+   και υποσέλιδο (τάξη αριστερά, «Επιμέλεια: …» δεξιά), ανεξάρτητα από το πρότυπο,
 5. έλεγχος round-trip: οι εξισώσεις διαβάζονται πίσω από το .docx.
 """
 
@@ -299,6 +300,11 @@ _TBLPR_ORDER = ["tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBa
                 "tblLook", "tblCaption", "tblDescription", "tblPrChange"]
 
 
+_STYLE_ORDER = ["name", "aliases", "basedOn", "next", "link", "autoRedefine", "hidden", "uiPriority",
+                "semiHidden", "unhideWhenUsed", "qFormat", "locked", "personal", "personalCompose",
+                "personalReply", "rsid", "pPr", "rPr", "tblPr", "trPr", "tcPr", "tblStylePr"]
+
+
 def _get_or_insert(parent, local: str, order: list[str]):
     """Βρίσκει ή δημιουργεί παιδί στη θέση που ορίζει το σχήμα OOXML."""
     el = parent.find(W + local)
@@ -414,53 +420,220 @@ def _embed_svgs(files: dict[str, bytes], figures: list[Figure]) -> None:
         files["[Content_Types].xml"] = etree.tostring(ct, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
-def _replace_footer_text(xml: bytes, text: str) -> bytes:
-    """Αντικαθιστά το κείμενο του υποσέλιδου κρατώντας τη μορφοποίηση του πρώτου κειμένου και τα πεδία."""
-    root = etree.fromstring(xml)
-    text_runs = []
-    for r in root.iter(W + "r"):
-        if r.find(W + "t") is None:
+# --------------------------------------------------------------------------- γραμματοσειρά
+
+@dataclass
+class PageSetup:
+    """Ό,τι επιβάλλει η εφαρμογή ανεξάρτητα από το πρότυπο."""
+
+    font_name: str = "Cambria"
+    font_size: float = 12  # pt
+    class_name: str = ""  # υποσέλιδο αριστερά
+    editor: str = ""  # υποσέλιδο δεξιά: «Επιμέλεια: …»
+
+
+def _set_run_fonts(rpr, font: str, half_points: int) -> None:
+    rfonts = _get_or_insert(rpr, "rFonts", _RPR_ORDER)
+    for attr in list(rfonts.attrib):
+        if attr.lower().endswith("theme"):  # asciiTheme, cstheme… υπερισχύουν των ονομάτων — αφαιρούνται
+            del rfonts.attrib[attr]
+    for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+        rfonts.set(W + attr, font)
+    _get_or_insert(rpr, "sz", _RPR_ORDER).set(W + "val", str(half_points))
+    _get_or_insert(rpr, "szCs", _RPR_ORDER).set(W + "val", str(half_points))
+
+
+def _apply_fonts(styles_xml: bytes, font: str, size_pt: float) -> bytes:
+    """Ίδια γραμματοσειρά και μέγεθος παντού: προεπιλογές εγγράφου και κάθε στυλ του προτύπου."""
+    root = etree.fromstring(styles_xml)
+    hp = int(round(size_pt * 2))
+    defaults = root.find(W + "docDefaults")
+    if defaults is None:
+        defaults = etree.Element(W + "docDefaults")
+        root.insert(0, defaults)
+    rpr_default = defaults.find(W + "rPrDefault")
+    if rpr_default is None:
+        rpr_default = etree.SubElement(defaults, W + "rPrDefault")
+        defaults.insert(0, rpr_default)
+    rpr = rpr_default.find(W + "rPr")
+    if rpr is None:
+        rpr = etree.SubElement(rpr_default, W + "rPr")
+    _set_run_fonts(rpr, font, hp)
+    for st in root.findall(W + "style"):
+        if st.get(W + "type") not in ("paragraph", "character", "table"):
             continue
-        # αγνοούμε τα runs μέσα σε πεδία (αριθμός σελίδας κ.λπ.)
-        if r.getparent() is not None and r.getparent().tag == W + "fldSimple":
-            continue
-        text_runs.append(r)
-    if not text_runs:
-        paras = list(root.iter(W + "p"))
-        if not paras:
-            return xml
-        r = etree.SubElement(paras[0], W + "r")
-        etree.SubElement(r, W + "t")
-        text_runs = [r]
-    first = text_runs[0]
-    for r in text_runs[1:]:
-        r.getparent().remove(r)
-    for child in list(first):
-        if child.tag in (W + "t", W + "br", W + "tab"):
-            first.remove(child)
-    lines = text.split("\n")
-    for i, line in enumerate(lines):
-        if i:
-            etree.SubElement(first, W + "br")
-        for j, chunk in enumerate(line.split("\t")):
-            if j:
-                etree.SubElement(first, W + "tab")
-            t = etree.SubElement(first, W + "t")
-            t.text = chunk
-            t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        _set_run_fonts(_get_or_insert(st, "rPr", _STYLE_ORDER), font, hp)
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
-def postprocess(docx_path: Path, figures: list[Figure], footer_text: str = "") -> None:
+def _sort_children(el, order: list[str]) -> None:
+    """Ταξινόμηση παιδιών κατά τη σειρά του σχήματος OOXML (όσα δεν είναι στη λίστα μένουν στο τέλος)."""
+    kids = list(el)
+    if len(kids) < 2:
+        return
+    rank = {n: i for i, n in enumerate(order)}
+    kids_sorted = sorted(kids, key=lambda c: rank.get(etree.QName(c).localname, len(order)))
+    if kids_sorted != kids:
+        for c in kids:
+            el.remove(c)
+        el.extend(kids_sorted)
+
+
+def _normalize_order(xml: bytes) -> bytes:
+    root = etree.fromstring(xml)
+    for rpr in root.iter(W + "rPr"):
+        _sort_children(rpr, _RPR_ORDER)
+    for ppr in root.iter(W + "pPr"):
+        _sort_children(ppr, _PPR_ORDER)
+    for tblpr in root.iter(W + "tblPr"):
+        _sort_children(tblpr, _TBLPR_ORDER)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _apply_run_fonts(doc_xml: bytes, font: str, size_pt: float) -> bytes:
+    """Και στα runs του κειμένου (μόνο όπου το pandoc έβαλε ρητή γραμματοσειρά/μέγεθος)."""
+    root = etree.fromstring(doc_xml)
+    hp = int(round(size_pt * 2))
+    math_ns = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+    for rpr in root.iter(W + "rPr"):
+        parent = rpr.getparent()
+        if parent is not None and etree.QName(parent).namespace == math_ns:
+            continue  # οι εξισώσεις μένουν σε Cambria Math
+        if rpr.find(W + "rFonts") is not None or rpr.find(W + "sz") is not None:
+            _set_run_fonts(rpr, font, hp)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+# --------------------------------------------------------------------------- κεφαλίδα / υποσέλιδο
+
+HDR_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
+FTR_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
+HDR_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"
+FTR_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"
+_XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+_W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"')
+
+
+def _xml_escape(t: str) -> str:
+    return (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _rpr_xml(font: str, hp: int, bold: bool = False) -> str:
+    f = _xml_escape(font)
+    return (f'<w:rPr><w:rFonts w:ascii="{f}" w:hAnsi="{f}" w:cs="{f}" w:eastAsia="{f}"/>'
+            + ("<w:b/><w:bCs/>" if bold else "") + f'<w:sz w:val="{hp}"/><w:szCs w:val="{hp}"/></w:rPr>')
+
+
+def _text_run(text: str, font: str, hp: int, bold: bool = False) -> str:
+    return f'<w:r>{_rpr_xml(font, hp, bold)}<w:t xml:space="preserve">{_xml_escape(text)}</w:t></w:r>'
+
+
+def _field_runs(instr: str, font: str, hp: int, bold: bool = True) -> str:
+    rp = _rpr_xml(font, hp, bold)
+    return (f'<w:r>{rp}<w:fldChar w:fldCharType="begin"/></w:r>'
+            f'<w:r>{rp}<w:instrText xml:space="preserve"> {instr} </w:instrText></w:r>'
+            f'<w:r>{rp}<w:fldChar w:fldCharType="separate"/></w:r>'
+            f'<w:r>{rp}<w:t>1</w:t></w:r>'
+            f'<w:r>{rp}<w:fldChar w:fldCharType="end"/></w:r>')
+
+
+def header_xml(font: str, size_pt: float) -> bytes:
+    """«Σελίδα X από Y» στο κέντρο της κεφαλίδας."""
+    hp = int(round(size_pt * 2))
+    body = (_text_run("Σελίδα ", font, hp) + _field_runs("PAGE", font, hp)
+            + _text_run(" από ", font, hp) + _field_runs("NUMPAGES", font, hp))
+    xml = (f'{_XML_HEAD}<w:hdr {_W_NS}><w:p><w:pPr><w:jc w:val="center"/>{_rpr_xml(font, hp)}</w:pPr>'
+           f'{body}</w:p></w:hdr>')
+    return xml.encode("utf-8")
+
+
+def footer_xml(font: str, size_pt: float, class_name: str, editor: str, text_width_twips: int) -> bytes:
+    """Τάξη αριστερά και «Επιμέλεια: …» δεξιά, στην ίδια γραμμή (στάση στηλοθέτη στο δεξί περιθώριο)."""
+    hp = int(round(size_pt * 2))
+    runs = _text_run(class_name, font, hp) if class_name else ""
+    if editor:
+        runs += f'<w:r>{_rpr_xml(font, hp)}<w:tab/></w:r>' + _text_run(f"Επιμέλεια: {editor}", font, hp)
+    xml = (f'{_XML_HEAD}<w:ftr {_W_NS}><w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="{text_width_twips}"/></w:tabs>'
+           f'{_rpr_xml(font, hp)}</w:pPr>{runs}</w:p></w:ftr>')
+    return xml.encode("utf-8")
+
+
+def _text_width(sect) -> int:
+    pg, mar = sect.find(W + "pgSz"), sect.find(W + "pgMar")
+    try:
+        width = int(pg.get(W + "w")) if pg is not None else 11906
+        left = int(mar.get(W + "left")) if mar is not None else 1134
+        right = int(mar.get(W + "right")) if mar is not None else 1134
+        return max(2000, width - left - right)
+    except (TypeError, ValueError):
+        return 9638
+
+
+def _install_header_footer(files: dict[str, bytes], setup: PageSetup) -> None:
+    """Αντικαθιστά κεφαλίδα/υποσέλιδο του προτύπου με τα δικά μας σε κάθε ενότητα του εγγράφου."""
+    doc = etree.fromstring(files["word/document.xml"])
+    rels = etree.fromstring(files["word/_rels/document.xml.rels"])
+    ct = etree.fromstring(files["[Content_Types].xml"])
+    existing = {r.get("Id") for r in rels}
+
+    def new_rid(base: str) -> str:
+        i = 1
+        while f"{base}{i}" in existing:
+            i += 1
+        existing.add(f"{base}{i}")
+        return f"{base}{i}"
+
+    sects = list(doc.iter(W + "sectPr"))
+    if not sects:
+        body = doc.find(W + "body")
+        sects = [etree.SubElement(body, W + "sectPr")]
+    width = _text_width(sects[-1])
+    files["word/header_exam.xml"] = header_xml(setup.font_name, setup.font_size)
+    files["word/footer_exam.xml"] = footer_xml(setup.font_name, setup.font_size, setup.class_name, setup.editor, width)
+    hid, fid = new_rid("rIdExamHdr"), new_rid("rIdExamFtr")
+    for rid, typ, target in ((hid, HDR_REL, "header_exam.xml"), (fid, FTR_REL, "footer_exam.xml")):
+        rel = etree.SubElement(rels, "{%s}Relationship" % NS["rel"])
+        rel.set("Id", rid)
+        rel.set("Type", typ)
+        rel.set("Target", target)
+    for part, ctype in (("/word/header_exam.xml", HDR_CT), ("/word/footer_exam.xml", FTR_CT)):
+        ov = etree.SubElement(ct, "{%s}Override" % NS["ct"])
+        ov.set("PartName", part)
+        ov.set("ContentType", ctype)
+    for sect in sects:
+        for child in list(sect):
+            if child.tag in (W + "headerReference", W + "footerReference", W + "titlePg"):
+                sect.remove(child)
+        f_ref = etree.Element(W + "footerReference")
+        f_ref.set(W + "type", "default")
+        f_ref.set("{%s}id" % NS["r"], fid)
+        h_ref = etree.Element(W + "headerReference")
+        h_ref.set(W + "type", "default")
+        h_ref.set("{%s}id" % NS["r"], hid)
+        sect.insert(0, f_ref)
+        sect.insert(0, h_ref)  # οι αναφορές μπαίνουν πρώτες στο sectPr (σειρά σχήματος OOXML)
+    files["word/document.xml"] = etree.tostring(doc, xml_declaration=True, encoding="UTF-8", standalone=True)
+    files["word/_rels/document.xml.rels"] = etree.tostring(rels, xml_declaration=True, encoding="UTF-8", standalone=True)
+    files["[Content_Types].xml"] = etree.tostring(ct, xml_declaration=True, encoding="UTF-8", standalone=True)
+    if "word/settings.xml" in files:  # χωρίς διαφορετική κεφαλίδα μονών/ζυγών σελίδων
+        st = etree.fromstring(files["word/settings.xml"])
+        for el in st.findall(W + "evenAndOddHeaders"):
+            st.remove(el)
+        files["word/settings.xml"] = etree.tostring(st, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def postprocess(docx_path: Path, figures: list[Figure], setup: PageSetup | None = None) -> None:
+    setup = setup or PageSetup()
     with zipfile.ZipFile(docx_path) as z:
         files = {n: z.read(n) for n in z.namelist()}
     style_ids = _style_ids(files["word/styles.xml"])
     files["word/document.xml"] = _fix_document(files["word/document.xml"], style_ids)
     _embed_svgs(files, figures)
-    if footer_text.strip():
-        for name in list(files):
-            if re.match(r"word/footer\d*\.xml$", name):
-                files[name] = _replace_footer_text(files[name], footer_text)
+    files["word/styles.xml"] = _apply_fonts(files["word/styles.xml"], setup.font_name, setup.font_size)
+    files["word/document.xml"] = _apply_run_fonts(files["word/document.xml"], setup.font_name, setup.font_size)
+    _install_header_footer(files, setup)
+    files["word/document.xml"] = _normalize_order(files["word/document.xml"])
     tmp = docx_path.with_suffix(".tmp.docx")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         # το [Content_Types].xml πρώτο, όπως το θέλει το Office
@@ -506,8 +679,8 @@ def default_template() -> Path:
     return resource("resources", "default_template.docx")
 
 
-def build_docx(exam: dict, out_path: Path, template: str = "", footer_text: str = "",
-               sublevel_style: str = "roman", points_align: str = "right") -> dict:
+def build_docx(exam: dict, out_path: Path, template: str = "", sublevel_style: str = "roman",
+               points_align: str = "right", setup: PageSetup | None = None) -> dict:
     """Παράγει το .docx. Επιστρέφει {"path", "warnings", "math": (αναμενόμενες, βρέθηκαν)}."""
     tpl = Path(template) if template else default_template()
     if not tpl.exists():
@@ -526,7 +699,9 @@ def build_docx(exam: dict, out_path: Path, template: str = "", footer_text: str 
         tmp_out = tdp / "out.docx"
         expected = math_count(md_path, _MD_FORMAT)
         _run_pandoc(md_path, tmp_out, tpl_copy, tdp)
-        postprocess(tmp_out, ctx.figures, footer_text)
+        if setup is None:
+            setup = PageSetup(class_name=exam.get("class_name", ""), editor=exam.get("editor", ""))
+        postprocess(tmp_out, ctx.figures, setup)
         try:
             shutil.copyfile(tmp_out, out_path)
         except PermissionError as exc:

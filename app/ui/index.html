@@ -18,8 +18,14 @@
     <button data-tab="review"><span class="n">2</span> Έλεγχος</button>
     <button data-tab="done"><span class="n">3</span> Word</button>
   </nav>
-  <button class="icon-btn" id="btn-settings" title="Ρυθμίσεις">⚙ Ρυθμίσεις</button>
+  <div class="top-actions">
+    <button class="icon-btn" id="btn-guide" title="Οδηγός χρήσης">? Οδηγός</button>
+    <button class="icon-btn" id="btn-theme" title="Εμφάνιση">◐ Αυτόματο</button>
+    <button class="icon-btn" id="btn-about" title="Σχετικά, έκδοση και ιστορικό αλλαγών"><span id="app-version">v</span></button>
+    <button class="icon-btn" id="btn-settings" title="Ρυθμίσεις">⚙ Ρυθμίσεις</button>
+  </div>
 </header>
+<div class="update-banner" id="update-banner" hidden></div>
 
 <main>
   <!-- ============================================================ 1. Διαγώνισμα -->
@@ -35,12 +41,28 @@
         </label>
         <label>Ημερομηνία
           <span class="row">
-            <input id="f-date" type="text" placeholder="κενό = γραμμή για συμπλήρωση">
+            <input id="f-date" type="text" placeholder="Αφήστε το κενό για να τυπωθεί γραμμή συμπλήρωσης (_____)">
             <button class="btn small" id="btn-today" type="button">Σήμερα</button>
           </span>
         </label>
-        <label>Κείμενο υποσέλιδου
-          <input id="f-footer" type="text" placeholder="κενό = όπως στο πρότυπο">
+        <div></div>
+        <label>Τάξη <span class="muted small">(υποσέλιδο, αριστερά)</span>
+          <span class="row">
+            <input id="f-class" type="text" list="classes-list" placeholder="π.χ. Β’ ΛΥΚΕΙΟΥ ΑΛΓΕΒΡΑ — επιλέξτε από τη λίστα ή γράψτε νέα">
+            <button class="btn small" id="classes-save" type="button" title="Αποθήκευση της τιμής στη λίστα">＋ Λίστα</button>
+            <button class="btn small ghost" id="classes-toggle" type="button" title="Προβολή/διαγραφή τιμών της λίστας">☰</button>
+          </span>
+          <datalist id="classes-list"></datalist>
+          <div class="list-manage" id="classes-manage" hidden></div>
+        </label>
+        <label>Επιμέλεια <span class="muted small">(υποσέλιδο, δεξιά: «Επιμέλεια: …»)</span>
+          <span class="row">
+            <input id="f-editor" type="text" list="editors-list" placeholder="π.χ. Ονοματεπώνυμο — επιλέξτε από τη λίστα ή γράψτε νέο">
+            <button class="btn small" id="editors-save" type="button" title="Αποθήκευση της τιμής στη λίστα">＋ Λίστα</button>
+            <button class="btn small ghost" id="editors-toggle" type="button" title="Προβολή/διαγραφή τιμών της λίστας">☰</button>
+          </span>
+          <datalist id="editors-list"></datalist>
+          <div class="list-manage" id="editors-manage" hidden></div>
         </label>
         <label>Πλήθος θεμάτων
           <select id="f-nthemes">
@@ -63,7 +85,7 @@
   <!-- ============================================================ 2. Έλεγχος -->
   <section id="tab-review" class="tab">
     <div class="intro-note">
-      Ελέγξτε κάθε θέμα: αριστερά το πρωτότυπο, δεξιά η μεταγραφή. Οι αλλαγές στο κείμενο φαίνονται αμέσως
+      Ελέγξτε κάθε άσκηση: αριστερά το πρωτότυπο (όλες οι σελίδες), δεξιά η μεταγραφή. Οι αλλαγές στο κείμενο φαίνονται αμέσως
       στην προεπισκόπηση. Οι εξισώσεις γράφονται μέσα σε <code>$…$</code>.
     </div>
     <div id="review"></div>
@@ -141,10 +163,19 @@
       <button class="btn" id="s-template-choose">Επιλογή διαγωνίσματος ως πρότυπο…</button>
       <button class="btn ghost" id="s-template-reset">Ενσωματωμένο πρότυπο</button>
     </div>
-    <p class="muted small">Από το πρότυπο κρατιούνται κεφαλίδα, υποσέλιδο, περιθώρια και γραμματοσειρές. Το περιεχόμενό του αγνοείται.</p>
+    <p class="muted small">Από το πρότυπο κρατιούνται τα περιθώρια, το μέγεθος σελίδας και τα στυλ παραγράφων. Το κείμενό του αγνοείται.
+      Κεφαλίδα («Σελίδα X από Y» στο κέντρο), υποσέλιδο (Τάξη και Επιμέλεια) και γραμματοσειρά τα ορίζει πάντα η εφαρμογή.</p>
     <div class="kv"><span>Φάκελος αποθήκευσης</span><span id="s-outdir"></span></div>
     <div class="row"><button class="btn" id="s-outdir-choose">Αλλαγή φακέλου…</button></div>
     <div class="grid2">
+      <label>Γραμματοσειρά
+        <input id="s-font" list="fonts" type="text">
+        <datalist id="fonts"></datalist>
+        <span class="muted small">Σε όλο το έγγραφο, κεφαλίδα, υποσέλιδο και σχήματα, ανεξάρτητα από το πρότυπο. Οι εξισώσεις μένουν σε Cambria Math.</span>
+      </label>
+      <label>Μέγεθος (pt)
+        <select id="s-size"></select>
+      </label>
       <label>Υπο-ερωτήματα
         <select id="s-sublevel"><option value="roman">i), ii), iii)</option><option value="bullet">Κουκκίδες</option></select>
       </label>
@@ -152,6 +183,27 @@
         <select id="s-align"><option value="right">Δεξιά</option><option value="left">Αριστερά</option></select>
       </label>
     </div>
+
+    <h3>Εμφάνιση και ενημερώσεις</h3>
+    <div class="grid2">
+      <label>Εμφάνιση
+        <select id="s-theme">
+          <option value="system">Αυτόματα (όπως τα Windows)</option>
+          <option value="light">Φωτεινή</option>
+          <option value="dark">Σκοτεινή</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="s-check-updates"> Έλεγχος για νέα έκδοση κατά την εκκίνηση</label>
+    </div>
+    <div class="row">
+      <button class="btn" id="s-check-now">Έλεγχος για ενημερώσεις τώρα</button>
+    </div>
+    <details>
+      <summary class="small">Για προχωρημένους: από πού ελέγχονται οι ενημερώσεις</summary>
+      <label>Repository GitHub (κάτοχος/όνομα)
+        <input id="s-repo" type="text" placeholder="EDaskal/MATHEMATICS">
+      </label>
+    </details>
 
     <h3>Κανόνες μεταγραφής</h3>
     <p class="muted small">Οι οδηγίες που παίρνει ο Claude. Αλλάζουν χωρίς νέα εγκατάσταση.</p>
@@ -166,6 +218,35 @@
       <div class="spacer"></div>
       <button class="btn primary" id="s-save">Αποθήκευση & κλείσιμο</button>
     </div>
+  </div>
+</div>
+
+<!-- ============================================================ Σχετικά / Τι νέο -->
+<div class="modal" id="about" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2 id="about-version">Έκδοση</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <p class="muted">Γεννήτρια Διαγωνισμάτων: διαγωνίσματα Word από φωτογραφίες θεμάτων, με τη βοήθεια του Claude.</p>
+    <div class="kv-grid" id="about-kv"></div>
+    <div class="row">
+      <button class="btn" id="about-check">Έλεγχος για ενημερώσεις</button>
+    </div>
+    <div id="about-update"></div>
+    <h3>Τι νέο — ιστορικό αλλαγών</h3>
+    <div class="doc" id="about-changelog"></div>
+  </div>
+</div>
+
+<!-- ============================================================ Οδηγός χρήσης -->
+<div class="modal" id="guide" hidden>
+  <div class="modal-body wide">
+    <div class="modal-head">
+      <h2>Οδηγός χρήσης</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <div class="doc" id="guide-body"></div>
   </div>
 </div>
 

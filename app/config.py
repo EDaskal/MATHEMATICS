@@ -36,11 +36,21 @@ class Settings:
     api_aliases: dict = field(default_factory=lambda: dict(DEFAULT_API_ALIASES))
     template_path: str = ""  # κενό = το ενσωματωμένο πρότυπο
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
-    footer_text: str = ""  # κενό = κρατάει το υποσέλιδο του προτύπου
+    # Μορφή εγγράφου (επιβάλλεται ανεξάρτητα από το πρότυπο)
+    font_name: str = "Cambria"
+    font_size: float = 12.0
+    # Υποσέλιδο: αποθηκευμένες λίστες και τελευταία επιλογή
+    classes: list = field(default_factory=list)
+    editors: list = field(default_factory=list)
+    last_class: str = ""
+    last_editor: str = ""
     last_title: str = ""
     last_subtitle: str = ""
     sublevel_style: str = "roman"  # "roman" → i), ii) | "bullet" → κουκκίδες
     points_align: str = "right"  # right | left
+    theme: str = "system"  # light | dark | system
+    check_updates: bool = True
+    update_repo: str = "EDaskal/MATHEMATICS"  # από πού ελέγχονται οι νέες εκδόσεις (GitHub Releases)
     max_parallel: int = 3
     timeout_sec: int = 300
 
@@ -60,6 +70,13 @@ class Settings:
         path = user_dir() / "settings.json"
         path.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def remember(self, list_name: str, value: str) -> None:
+        """Προσθέτει τιμή στην αποθηκευμένη λίστα (τάξεις/επιμελητές), χωρίς διπλότυπα."""
+        value = (value or "").strip()
+        lst = getattr(self, list_name)
+        if value and value not in lst:
+            lst.append(value)
+
     def api_model(self) -> str:
         return self.api_aliases.get(self.model, self.model)
 
@@ -70,9 +87,19 @@ class Settings:
         known = {f.name: f for f in fields(self)}
         for k, v in data.items():
             if k in known:
-                if isinstance(getattr(self, k), bool):
+                ftype = str(known[k].type)
+                if ftype == "bool":
                     v = bool(v)
-                elif isinstance(getattr(self, k), int):
+                elif ftype == "float":
+                    try:
+                        v = float(v)
+                    except (TypeError, ValueError):
+                        continue
+                elif ftype == "list":
+                    if not isinstance(v, list):
+                        continue
+                    v = [str(x).strip() for x in v if str(x).strip()]
+                elif ftype == "int":
                     try:
                         v = int(v)
                     except (TypeError, ValueError):

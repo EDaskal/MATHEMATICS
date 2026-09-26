@@ -211,14 +211,20 @@ class Api:
         return {"ok": True, "image_id": image_id}
 
     def transcribe(self, jobs: list[dict]) -> dict:
-        """jobs: [{"job_id", "image_id"}]. Τα αποτελέσματα έρχονται ως γεγονότα «transcribed»."""
-        valid = [(j["job_id"], self._images[j["image_id"]].read_bytes()) for j in jobs if j.get("image_id") in self._images]
+        """jobs: [{"job_id", "image_ids": [σελίδα 1, σελίδα 2, …]}] (δεκτό και το παλιό "image_id").
+        Τα αποτελέσματα έρχονται ως γεγονότα «transcribed»."""
+        valid = []
+        for j in jobs:
+            ids = j.get("image_ids") or ([j["image_id"]] if j.get("image_id") else [])
+            pages = [self._images[i].read_bytes() for i in ids if i in self._images]
+            if pages:
+                valid.append((j["job_id"], pages))
         if not valid:
             return {"ok": False, "error": "Δεν υπάρχουν εικόνες για μεταγραφή."}
         threading.Thread(target=self._transcribe_worker, args=(valid,), daemon=True).start()
         return {"ok": True, "count": len(valid)}
 
-    def _transcribe_worker(self, jobs: list[tuple[str, bytes]]) -> None:
+    def _transcribe_worker(self, jobs: list[tuple[str, list[bytes]]]) -> None:
         from .providers import get_provider
         from .transcribe import transcribe_many
 
@@ -250,7 +256,7 @@ class Api:
 
         base = self._session_dir / f"fig_{key}_{uuid.uuid4().hex[:6]}"
         try:
-            info = render_to_files(spec_json, base)
+            info = render_to_files(spec_json, base, font=self._settings.font_name)
             info["png_data"] = _data_url(info["png"])
             info["error"] = None
             return info
@@ -285,15 +291,33 @@ class Api:
     # ------------------------------------------------------------ παραγωγή
 
     def build(self, exam: dict) -> dict:
-        from .docx_build import BuildError, build_docx
+        """exam: στοιχεία + θέματα. Στα σχήματα, η οθόνη στέλνει {"mode", "spec_json", "png", "svg", "width_cm"}·
+        τα επανασχεδιασμένα ξανασχεδιάζονται εδώ με την τρέχουσα γραμματοσειρά."""
+        from .docx_build import BuildError, PageSetup, build_docx
+        from .figures import FigureError, render_to_files
 
         s = self._settings
         s.last_title = exam.get("title", s.last_title)
         s.last_subtitle = exam.get("subtitle", s.last_subtitle)
-        if exam.get("footer") is not None:
-            s.footer_text = exam["footer"]
+        s.last_class = exam.get("class_name", "")
+        s.last_editor = exam.get("editor", "")
+        s.remember("classes", s.last_class)
+        s.remember("editors", s.last_editor)
         s.save()
-        # τα σχήματα: επιλογή επανασχεδιασμένου ή πρωτότυπης περικοπής γίνεται στην οθόνη
+
+        warnings: list[str] = []
+        for ti, theme in enumerate(exam.get("themes", [])):
+            for ei, ex in enumerate(theme.get("exercises", [])):
+                fr = ex.get("figure_render")
+                if fr and fr.get("mode") == "redraw" and fr.get("spec_json"):
+                    try:
+                        info = render_to_files(fr["spec_json"], self._session_dir / f"final_{ti}_{ei}_{uuid.uuid4().hex[:4]}",
+                                               font=s.font_name)
+                        ex["figure_render"] = info
+                    except FigureError as exc:
+                        warnings.append(f"Σχήμα θέματος {ti + 1}: {exc}")
+                        ex["figure_render"] = None
+
         name = _safe_name(" ".join(x for x in (exam.get("title"), exam.get("subtitle"), exam.get("date", "").replace("/", ".")) if x))
         out_dir = Path(s.output_dir or ".")
         out = out_dir / f"{name}.docx"
@@ -301,23 +325,90 @@ class Api:
         while out.exists():
             out = out_dir / f"{name} ({i}).docx"
             i += 1
+        setup = PageSetup(font_name=s.font_name or "Cambria", font_size=float(s.font_size or 12),
+                          class_name=exam.get("class_name", ""), editor=exam.get("editor", ""))
         try:
-            res = build_docx(
-                exam, out, template=s.template_path, footer_text=exam.get("footer") or "",
-                sublevel_style=s.sublevel_style, points_align=s.points_align,
-            )
+            res = build_docx(exam, out, template=s.template_path, sublevel_style=s.sublevel_style,
+                             points_align=s.points_align, setup=setup)
         except BuildError as exc:
             return {"ok": False, "error": str(exc)}
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             return {"ok": False, "error": f"Απρόσμενο σφάλμα: {exc}"}
-        # αντίγραφο της μεταγραφής (JSON) δίπλα στο docx, για μελλοντική επεξεργασία
         try:
             (self._session_dir / "last_exam.json").write_text(json.dumps(exam, ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError:
             pass
         res.pop("markdown", None)
-        return {"ok": True, **res}
+        res["warnings"] = warnings + res.get("warnings", [])
+        return {"ok": True, **res, "state": self.get_state()}
+
+    # ------------------------------------------------------------ έκδοση & ενημερώσεις
+
+    def get_about(self) -> dict:
+        from .paths import build_info, doc_path
+
+        def read(name):
+            p = doc_path(name)
+            return p.read_text(encoding="utf-8") if p else ""
+
+        return {
+            "version": __version__,
+            "build": build_info(),
+            "changelog": read("CHANGELOG.md"),
+            "guide": read("docs/user-guide.md"),
+            "repo": self._settings.update_repo,
+        }
+
+    def check_updates(self) -> dict:
+        from .updates import UpdateError, check
+
+        try:
+            return {"ok": True, **check(self._settings.update_repo, __version__)}
+        except UpdateError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"Αποτυχία ελέγχου: {exc}"}
+
+    def install_update(self, url: str) -> dict:
+        """Κατεβάζει το νέο πρόγραμμα εγκατάστασης (γεγονότα «update_progress»), το τρέχει και κλείνει την εφαρμογή."""
+        threading.Thread(target=self._update_worker, args=(url,), daemon=True).start()
+        return {"ok": True}
+
+    def _update_worker(self, url: str) -> None:
+        from .updates import UpdateError, download, launch_installer
+
+        def progress(done, total):
+            self.emit("update_progress", {"done": done, "total": total})
+
+        try:
+            path = download(url, progress)
+            self.emit("update_progress", {"done": 1, "total": 1, "stage": "install"})
+            launch_installer(path)
+        except UpdateError as exc:
+            self.emit("update_progress", {"error": str(exc)})
+            return
+        except Exception as exc:  # noqa: BLE001
+            self.emit("update_progress", {"error": f"Αποτυχία ενημέρωσης: {exc}"})
+            return
+        # το πρόγραμμα εγκατάστασης θα αντικαταστήσει τα αρχεία: κλείνουμε
+        def _quit():
+            try:
+                if self._window is not None:
+                    self._window.destroy()
+            finally:
+                os._exit(0)
+
+        threading.Timer(1.5, _quit).start()
+
+    def forget_value(self, list_name: str, value: str) -> dict:
+        """Αφαίρεση τιμής από αποθηκευμένη λίστα (τάξεις/επιμελητές)."""
+        if list_name in ("classes", "editors"):
+            lst = getattr(self._settings, list_name)
+            if value in lst:
+                lst.remove(value)
+                self._settings.save()
+        return self.get_state()
 
     def open_file(self, path: str) -> dict:
         try:

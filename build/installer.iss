@@ -22,6 +22,11 @@ UninstallDisplayIcon={app}\Diagonismata.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; ενημέρωση ενώ η εφαρμογή είναι ανοιχτή: κλείνει και ξανανοίγει
+CloseApplications=force
+RestartApplications=no
+VersionInfoVersion={#AppVersion}
+VersionInfoDescription=Γεννήτρια Διαγωνισμάτων — πρόγραμμα εγκατάστασης
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -43,7 +48,8 @@ Name: "{group}\Γεννήτρια Διαγωνισμάτων"; Filename: "{app}\
 Name: "{autodesktop}\Γεννήτρια Διαγωνισμάτων"; Filename: "{app}\Diagonismata.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Diagonismata.exe"; Description: "Εκκίνηση τώρα"; Flags: nowait postinstall skipifsilent
+; χωρίς skipifsilent: μετά από αυτόματη (σιωπηλή) ενημέρωση η εφαρμογή ξανανοίγει μόνη της
+Filename: "{app}\Diagonismata.exe"; Description: "Εκκίνηση τώρα"; Flags: nowait postinstall
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

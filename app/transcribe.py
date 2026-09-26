@@ -49,9 +49,10 @@ FIGURE_SCHEMA = {
                 "description": {"type": "string"},
                 "spec_json": {"type": "string"},
                 "crop": {"type": "array", "items": {"type": "number"}},
+                "crop_page": {"type": "integer"},
                 "confidence": {"type": "string", "enum": ["high", "low"]},
             },
-            "required": ["description", "spec_json", "crop", "confidence"],
+            "required": ["description", "spec_json", "crop", "crop_page", "confidence"],
             "additionalProperties": False,
         },
     ]
@@ -75,6 +76,19 @@ USER_TEXT = (
     "Μετάγραψε την άσκηση της εικόνας σύμφωνα με τους κανόνες. "
     "Επίστρεψε μόνο τη δομή JSON που ζητείται."
 )
+
+USER_TEXT_PAGES = (
+    "Οι {n} εικόνες είναι ΔΙΑΔΟΧΙΚΕΣ ΣΕΛΙΔΕΣ της ΙΔΙΑΣ άσκησης, με τη σειρά που δίνονται "
+    "(σελίδα 1, σελίδα 2, …). Το κείμενο της κάθε σελίδας συνεχίζει εκεί που σταμάτησε η "
+    "προηγούμενη — μια πρόταση, εξίσωση ή ερώτημα μπορεί να κόβεται στην αλλαγή σελίδας. "
+    "Μετάγραψε ολόκληρη την άσκηση ως ΕΝΙΑΙΟ κείμενο σύμφωνα με τους κανόνες, χωρίς να "
+    "επαναλάβεις ή να παραλείψεις τίποτα στα σημεία ένωσης. Αγνόησε κεφαλίδες/υποσέλιδα/αριθμούς "
+    "σελίδων του βιβλίου και ό,τι ανήκει σε άλλη άσκηση. Επίστρεψε μόνο τη δομή JSON που ζητείται."
+)
+
+
+def user_text(n_pages: int) -> str:
+    return USER_TEXT if n_pages <= 1 else USER_TEXT_PAGES.format(n=n_pages)
 
 
 def load_rules() -> str:
@@ -124,7 +138,7 @@ def _norm_item(it: dict, depth: int = 1) -> dict:
     }
 
 
-def normalize(data: dict) -> dict:
+def normalize(data: dict, n_pages: int = 1) -> dict:
     fig = data.get("figure")
     if isinstance(fig, dict) and (fig.get("spec_json") or fig.get("description")):
         crop = fig.get("crop") or [0, 0, 1, 1]
@@ -134,6 +148,7 @@ def normalize(data: dict) -> dict:
             "description": str(fig.get("description", "")),
             "spec_json": str(fig.get("spec_json", "")),
             "crop": [min(1.0, max(0.0, float(c))) for c in crop],
+            "crop_page": min(max(0, int(fig.get("crop_page") or 0)), max(0, n_pages - 1)),
             "confidence": fig.get("confidence", "high"),
             "use_original": False,
         }
@@ -151,14 +166,17 @@ def normalize(data: dict) -> dict:
 
 # --------------------------------------------------------------------------- εκτέλεση
 
-async def transcribe_one(provider: Provider, image_bytes: bytes, rules: str | None = None) -> dict:
-    img = prepare_image(image_bytes)
+async def transcribe_one(provider: Provider, pages: list[bytes] | bytes, rules: str | None = None) -> dict:
+    """Μεταγραφή μιας άσκησης· `pages` = μία ή περισσότερες διαδοχικές σελίδες (εικόνες)."""
+    if isinstance(pages, (bytes, bytearray)):
+        pages = [bytes(pages)]
+    images = [prepare_image(p) for p in pages]
     rules = rules or load_rules()
     last_exc: Exception | None = None
     for _attempt in range(2):  # μία επανάληψη για προσωρινά σφάλματα
         try:
-            data = await provider.extract_json(rules, USER_TEXT, [img], EXERCISE_SCHEMA)
-            return normalize(data)
+            data = await provider.extract_json(rules, user_text(len(images)), images, EXERCISE_SCHEMA)
+            return normalize(data, len(images))
         except ProviderError as exc:
             last_exc = exc
             msg = str(exc)
@@ -169,16 +187,16 @@ async def transcribe_one(provider: Provider, image_bytes: bytes, rules: str | No
 
 async def transcribe_many(
     provider: Provider,
-    jobs: list[tuple[str, bytes]],
+    jobs: list[tuple[str, list[bytes] | bytes]],
     max_parallel: int = 3,
     on_done: Callable[[str, dict | None, str | None], Awaitable[None] | None] | None = None,
 ) -> dict[str, dict | str]:
-    """Μεταγράφει πολλές εικόνες παράλληλα. Επιστρέφει {id: αποτέλεσμα ή μήνυμα σφάλματος}."""
+    """Μεταγράφει πολλές ασκήσεις παράλληλα. Επιστρέφει {id: αποτέλεσμα ή μήνυμα σφάλματος}."""
     rules = load_rules()
     sem = asyncio.Semaphore(max(1, max_parallel))
     results: dict[str, dict | str] = {}
 
-    async def run(job_id: str, data: bytes):
+    async def run(job_id: str, data):
         async with sem:
             try:
                 res = await transcribe_one(provider, data, rules)
