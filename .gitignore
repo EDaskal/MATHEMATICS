@@ -8,3 +8,8 @@ app/bin/
 *.spec.bak
 Output/
 .venv/
+app/resources/build_info.json
+app/resources/docs/
+build/version_info.txt
+notes.md
+selftest.txt

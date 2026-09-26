@@ -1,5 +1,8 @@
-# Χτίζει το πρόγραμμα εγκατάστασης για Windows σε κάθε push στο main.
-# Για επίσημη έκδοση: git tag v1.0.1 && git push --tags → δημιουργείται και GitHub Release.
+# Χτίζει το πρόγραμμα εγκατάστασης για Windows σε κάθε αλλαγή στο main.
+#
+# Αυτόματη δημοσίευση έκδοσης: αν ο αριθμός έκδοσης (app/__init__.py → __version__) δεν έχει
+# δημοσιευτεί ακόμα, δημιουργείται αυτόματα GitHub Release «vX.Y.Z» με το πρόγραμμα εγκατάστασης
+# και σημειώσεις από το CHANGELOG.md. Από εκεί το βρίσκει ο έλεγχος ενημερώσεων της εφαρμογής.
 name: Build Windows installer
 
 on:
@@ -10,6 +13,11 @@ on:
 
 permissions:
   contents: write
+
+# Αν ανέβουν πολλές αλλαγές μαζί, ακυρώνονται τα παλιότερα builds και μετράει το τελευταίο.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   PANDOC_VERSION: "3.6.4"
@@ -43,12 +51,30 @@ jobs:
       - name: Δοκιμές
         run: python -m pytest -q
 
-      - name: Έκδοση
+      - name: Έκδοση και απόφαση για δημοσίευση
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $v = python -c "import app; print(app.__version__)"
-          if ($env:GITHUB_REF -like 'refs/tags/v*') { $v = $env:GITHUB_REF_NAME.TrimStart('v') }
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $tag = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($tag -ne $v) { Write-Error "Το tag v$tag δεν ταιριάζει με την έκδοση $v του app/__init__.py"; exit 1 }
+          }
+          # το CHANGELOG πρέπει να περιγράφει την έκδοση
+          python scripts/changelog_section.py $v | Out-File -FilePath notes.md -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { Write-Error "Προσθέστε ενότητα [$v] στο CHANGELOG.md"; exit 1 }
+          $release = "false"
+          gh release view "v$v" --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -ne 0) { $release = "true" }
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $release = "true" }
           "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "DO_RELEASE=$release" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Έκδοση $v — νέα δημοσίευση: $release"
+          exit 0
+
+      - name: Στοιχεία build (έκδοση, commit, οδηγός, ιστορικό)
+        run: python scripts/make_build_files.py ${{ env.APP_VERSION }} ${{ github.sha }} ${{ github.run_number }}
 
       - name: PyInstaller
         run: pyinstaller build/diagonismata.spec --noconfirm --distpath build/dist --workpath build/work
@@ -82,9 +108,13 @@ jobs:
           path: build/dist/Diagonismata-Setup-*.exe
           retention-days: 30
 
-      - name: GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Δημοσίευση έκδοσης (GitHub Release)
+        if: env.DO_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.APP_VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: Έκδοση ${{ env.APP_VERSION }}
+          body_path: notes.md
           files: build/dist/Diagonismata-Setup-*.exe
-          generate_release_notes: true
+          make_latest: true
