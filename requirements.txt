@@ -1,5 +1,7 @@
 # Εκτέλεση
-claude-agent-sdk>=0.2.159
+# Ακριβής έκδοση: κάθε έκδοση του SDK πρέπει να έχει έτοιμο πακέτο για Windows (win_amd64.whl)
+# που περιέχει το Claude Code CLI. Για αναβάθμιση αλλάζει μόνο ο αριθμός, αφού ελεγχθεί στο PyPI.
+claude-agent-sdk==0.2.159
 anthropic>=0.60
 pywebview>=5.3
 keyring>=25
