@@ -230,3 +230,43 @@ def test_download_rejects_insecure_url():
 
     with _pytest.raises(UpdateError):
         download("http://example.com/x.exe")
+
+
+def test_math_font_in_settings_and_runs(tmp_path):
+    from app.docx_build import PageSetup
+
+    out = tmp_path / "m.docx"
+    build_docx({"title": "Τ", "themes": [{"exercises": [load("three_levels.json")], "points": [50, 50]}]},
+               out, setup=PageSetup("Cambria", 12, "Α", "Β", "STIX Two Math", 11))
+    with zipfile.ZipFile(out) as z:
+        settings = z.read("word/settings.xml").decode()
+        doc = z.read("word/document.xml").decode()
+    assert 'm:mathFont m:val="STIX Two Math"' in settings
+    # κάθε τμήμα εξίσωσης έχει τη γραμματοσειρά και το μέγεθος μαθηματικών (11pt = 22 μισά σημεία)
+    assert doc.count("<m:r>") > 0
+    assert doc.count("<m:r>") == doc.count('<w:rFonts w:ascii="STIX Two Math"') - doc.count("<m:ctrlPr>")
+    assert re.search(r'<m:r><w:rPr><w:rFonts w:ascii="STIX Two Math"[^>]*/><w:sz w:val="22"/>', doc)
+    # σειρά μέσα στο m:r: m:rPr πριν από w:rPr
+    assert not re.search(r"<m:r><w:rPr>(?:(?!</w:rPr>).)*</w:rPr><m:rPr>", doc)
+
+
+def test_figure_font_and_size(tmp_path):
+    ex = load("lines_figure.json")
+    info = render_to_files(ex["figure"]["spec_json"], tmp_path / "f", font="STIX Two Math", size=14)
+    svg = Path(info["svg"]).read_text(encoding="utf-8")
+    assert "STIX Two Math" in svg and "14px" in svg
+
+
+def test_font_scan_detects_math_and_greek(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from app.fonts import scan
+
+    candidates = [Path("/usr/share/texmf/fonts/opentype/public/lm-math"), Path("/usr/share/fonts/truetype/dejavu")]
+    dirs = [d for d in candidates if d.exists()]
+    if not dirs:
+        pytest.skip("δεν υπάρχουν δοκιμαστικές γραμματοσειρές σε αυτό το σύστημα")
+    r = scan(refresh=True, dirs=dirs)
+    assert r["count"] > 0 and r["text"]
+    assert any(f["greek"] for f in r["text"])
+    assert r["math"], "αναμενόταν τουλάχιστον μία γραμματοσειρά μαθηματικών"
+    assert scan(dirs=dirs) == r  # από την cache

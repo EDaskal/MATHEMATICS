@@ -9,7 +9,10 @@
 
 const LETTERS = ["Α", "Β", "Γ", "Δ", "Ε", "ΣΤ", "Ζ", "Η", "Θ", "Ι"];
 const ROMAN = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"];
+// Εφεδρικές λίστες όταν δεν γίνεται ανάγνωση των εγκατεστημένων γραμματοσειρών
 const FONTS = ["Cambria", "Calibri", "Times New Roman", "Arial", "Georgia", "Book Antiqua", "Palatino Linotype", "Garamond", "Segoe UI", "Tahoma"];
+const MATH_FONTS = ["Cambria Math"];
+let FONT_INFO = null; // αποτέλεσμα list_fonts()
 const SIZES = [10, 10.5, 11, 11.5, 12, 13, 14];
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -866,18 +869,78 @@ function fillSettings() {
   $("#s-sublevel").value = s.sublevel_style;
   $("#s-align").value = s.points_align;
   $("#s-font").value = s.font_name;
-  $("#fonts").innerHTML = FONTS.map((f) => `<option value="${escapeHtml(f)}">`).join("");
-  const sizeSel = $("#s-size");
-  sizeSel.innerHTML = "";
-  const sizes = SIZES.includes(+s.font_size) ? SIZES : [...SIZES, +s.font_size].sort((a, b) => a - b);
-  for (const z of sizes) sizeSel.append(el("option", { value: z, text: String(z).replace(".", ",") }));
-  sizeSel.value = String(+s.font_size);
+  $("#s-math-font").value = s.math_font || "Cambria Math";
+  fillSizeSelect($("#s-size"), +s.font_size || 12);
+  fillSizeSelect($("#s-math-size"), +s.math_size || 12);
+  fillFontLists();
+  if (!FONT_INFO) loadFonts(false);
   $("#s-theme").value = s.theme || "system";
   $("#s-check-updates").checked = !!s.check_updates;
   $("#s-repo").value = s.update_repo || "";
   $("#s-rules-status").textContent = st.rules_custom ? "Χρησιμοποιούνται δικοί σας κανόνες." : "Χρησιμοποιούνται οι αρχικοί κανόνες.";
   $("#s-version").textContent = `Έκδοση ${st.version}`;
   updateTemplateHint();
+}
+
+/* ---------- γραμματοσειρές */
+function fillSizeSelect(sel, value) {
+  sel.innerHTML = "";
+  const sizes = SIZES.includes(value) ? SIZES : [...SIZES, value].sort((a, b) => a - b);
+  for (const z of sizes) sel.append(el("option", { value: z, text: String(z).replace(".", ",") }));
+  sel.value = String(value);
+}
+
+async function loadFonts(refresh) {
+  const st = $("#s-fonts-status");
+  st.textContent = refresh ? "Ανάγνωση γραμματοσειρών…" : "Φόρτωση λίστας γραμματοσειρών…";
+  try {
+    FONT_INFO = await api.list_fonts(!!refresh);
+  } catch (e) {
+    FONT_INFO = null;
+  }
+  fillFontLists();
+}
+
+function fillFontLists() {
+  const st = $("#s-fonts-status");
+  const text = FONT_INFO?.text?.length ? FONT_INFO.text : FONTS.map((n) => ({ name: n, greek: true }));
+  const math = FONT_INFO?.math?.length ? FONT_INFO.math : MATH_FONTS;
+  $("#fonts").innerHTML = text.map((f) => `<option value="${escapeHtml(f.name)}"${f.greek ? "" : ' label="χωρίς ελληνικά"'}>`).join("");
+  $("#math-fonts").innerHTML = math.map((n) => `<option value="${escapeHtml(n)}">`).join("");
+  if (FONT_INFO) {
+    st.textContent = `Βρέθηκαν ${text.length} γραμματοσειρές, από τις οποίες ${math.length} μαθηματικών.`;
+  } else if (st.textContent.startsWith("Φόρτωση") || st.textContent.startsWith("Ανάγνωση")) {
+    // περιμένουμε
+  } else {
+    st.textContent = "";
+  }
+  const rec = FONT_INFO?.recommended_math || [];
+  const installed = new Set(math.map((n) => n.toLowerCase()));
+  $("#s-math-recommend-list").innerHTML = rec.length
+    ? "<table><tr><th>Γραμματοσειρά</th><th>Ταιριάζει με κείμενο σε</th><th></th></tr>" +
+      rec.map((r) => `<tr><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.pair)}</td><td>${installed.has(r.name.toLowerCase()) ? "✓ εγκατεστημένη" : escapeHtml(r.note)}</td></tr>`).join("") + "</table>"
+    : "";
+  checkFontWarnings();
+}
+
+function checkFontWarnings() {
+  const txt = $("#s-font").value.trim();
+  const mth = $("#s-math-font").value.trim();
+  const tw = $("#s-font-warn");
+  const mw = $("#s-math-warn");
+  tw.textContent = "";
+  mw.textContent = "";
+  if (!FONT_INFO) return;
+  const tinfo = FONT_INFO.text.find((f) => f.name.toLowerCase() === txt.toLowerCase());
+  const isMath = FONT_INFO.math.some((n) => n.toLowerCase() === txt.toLowerCase());
+  if (txt && !tinfo) tw.textContent = "⚠ Δεν είναι εγκατεστημένη σε αυτόν τον υπολογιστή· το Word θα χρησιμοποιήσει άλλη.";
+  else if (tinfo && !tinfo.greek) tw.textContent = "⚠ Δεν υποστηρίζει ελληνικά — θα εμφανιστούν λάθος χαρακτήρες.";
+  else if (isMath) tw.textContent = "⚠ Γραμματοσειρά μαθηματικών στο απλό κείμενο: το Word αφήνει πολύ μεγάλα κενά ανάμεσα στις γραμμές. Προτείνεται η αντίστοιχη γραμματοσειρά κειμένου (π.χ. Cambria).";
+  if (mth && !FONT_INFO.math.some((n) => n.toLowerCase() === mth.toLowerCase())) {
+    mw.textContent = FONT_INFO.text.some((f) => f.name.toLowerCase() === mth.toLowerCase())
+      ? "⚠ Δεν είναι γραμματοσειρά μαθηματικών· το Word θα την αγνοήσει στις εξισώσεις και θα χρησιμοποιήσει Cambria Math."
+      : "⚠ Δεν είναι εγκατεστημένη σε αυτόν τον υπολογιστή· το Word θα χρησιμοποιήσει Cambria Math.";
+  }
 }
 
 function collectSettings() {
@@ -893,6 +956,8 @@ function collectSettings() {
     points_align: $("#s-align").value,
     font_name: $("#s-font").value.trim() || "Cambria",
     font_size: +$("#s-size").value || 12,
+    math_font: $("#s-math-font").value.trim() || "Cambria Math",
+    math_size: +$("#s-math-size").value || 12,
     theme: $("#s-theme").value,
     check_updates: $("#s-check-updates").checked,
     update_repo: $("#s-repo").value.trim() || "EDaskal/MATHEMATICS",
@@ -910,7 +975,7 @@ async function saveSettings(close = true) {
 function updateTemplateHint() {
   const s = S.app.settings;
   const h = $("#template-hint");
-  const fontInfo = `Γραμματοσειρά: ${s.font_name} ${String(s.font_size).replace(".", ",")} (αλλάζει από τις Ρυθμίσεις).`;
+  const fontInfo = `Γραμματοσειρές: κείμενο ${s.font_name} ${String(s.font_size).replace(".", ",")}, μαθηματικά ${s.math_font} ${String(s.math_size).replace(".", ",")} (αλλάζουν από τις Ρυθμίσεις).`;
   if (!s.template_path) {
     h.className = "hint-box warn";
     h.innerHTML = "";
@@ -960,6 +1025,9 @@ function bindSettings() {
     await api.reset_rules(); S.app = await api.get_state(); fillSettings();
   };
   $("#s-theme").onchange = (e) => applyTheme(e.target.value);
+  $("#s-font").addEventListener("input", checkFontWarnings);
+  $("#s-math-font").addEventListener("input", checkFontWarnings);
+  $("#s-fonts-refresh").onclick = () => loadFonts(true);
   $("#s-check-now").onclick = () => checkUpdates(true);
 }
 

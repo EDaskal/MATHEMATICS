@@ -27,6 +27,7 @@ for pkg in ("claude_agent_sdk", "webview", "keyring", "anthropic"):
 hiddenimports += collect_submodules("app")
 hiddenimports += ["keyring.backends.Windows", "win32ctypes.core", "win32ctypes.pywin32.win32cred", "clr"]
 hiddenimports += ["matplotlib.backends.backend_svg", "matplotlib.backends.backend_agg"]  # φορτώνονται δυναμικά από το savefig
+hiddenimports += collect_submodules("fontTools.ttLib.tables")  # πίνακες γραμματοσειρών (name, cmap, MATH) — δυναμική φόρτωση
 
 a = Analysis(  # noqa: F821
     [str(ROOT / "app" / "main.py")],

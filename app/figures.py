@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import threading
 import warnings
 from pathlib import Path
 
@@ -207,11 +208,24 @@ def _bounds(spec: dict) -> tuple[float, float, float, float]:
     return min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
 
 
-def render(spec: dict, font: str | None = None) -> tuple[bytes, bytes, float]:
-    """Επιστρέφει (svg, png, πλάτος σε cm). `font`: γραμματοσειρά ετικετών (ίδια με το κείμενο)."""
-    serif = ([font] if font else []) + ["Times New Roman", "DejaVu Serif"]
-    with plt.rc_context({"font.serif": serif}):
-        return _render(spec)
+_LOCK = threading.Lock()  # το pyplot δεν είναι ασφαλές για ταυτόχρονη χρήση από πολλά νήματα
+FS = 12.0  # μέγεθος ετικετών (pt)· ορίζεται σε κάθε σχεδίαση από τις ρυθμίσεις
+FS_SMALL = 9.5  # αριθμοί αξόνων, ετικέτες γωνιών
+
+
+def render(spec: dict, font: str | None = None, size: float | None = None) -> tuple[bytes, bytes, float]:
+    """Επιστρέφει (svg, png, πλάτος σε cm).
+
+    `font`/`size`: γραμματοσειρά και μέγεθος ετικετών (η «γραμματοσειρά μαθηματικών» των ρυθμίσεων).
+    Στο SVG το κείμενο μένει κείμενο με αυτή τη γραμματοσειρά, οπότε το Word το δείχνει σωστά
+    ακόμα κι αν η Python δεν τη βρει (π.χ. η Cambria Math είναι μέσα στο cambria.ttc)."""
+    global FS, FS_SMALL
+    serif = ([font] if font else []) + ["Cambria Math", "Cambria", "Times New Roman", "DejaVu Serif"]
+    with _LOCK:
+        FS = float(size or 12)
+        FS_SMALL = round(max(7.0, FS * 0.8), 1)
+        with plt.rc_context({"font.serif": serif, "font.size": FS}):
+            return _render(spec)
 
 
 def _render(spec: dict) -> tuple[bytes, bytes, float]:
@@ -247,24 +261,24 @@ def _render(spec: dict) -> tuple[bytes, bytes, float]:
         if xmin <= 0 <= xmax:
             ax.annotate("", xy=(0, ymax), xytext=(0, ymin), arrowprops=arrow, zorder=2)
         if axes.get("labels", True):
-            ax.text(xmax, -1.3 * unit, "x", ha="right", va="top", fontsize=11)
-            ax.text(xmin, 0.9 * unit, "x′", ha="left", va="bottom", fontsize=11)
-            ax.text(0.9 * unit, ymax, "y", ha="left", va="top", fontsize=11)
-            ax.text(0.9 * unit, ymin, "y′", ha="left", va="bottom", fontsize=11)
+            ax.text(xmax, -1.3 * unit, "x", ha="right", va="top", fontsize=FS)
+            ax.text(xmin, 0.9 * unit, "x′", ha="left", va="bottom", fontsize=FS)
+            ax.text(0.9 * unit, ymax, "y", ha="left", va="top", fontsize=FS)
+            ax.text(0.9 * unit, ymin, "y′", ha="left", va="bottom", fontsize=FS)
         origin = axes.get("origin", "O")
         if origin:
-            ax.text(-0.7 * unit, -0.7 * unit, origin, ha="right", va="top", fontsize=11)
+            ax.text(-0.7 * unit, -0.7 * unit, origin, ha="right", va="top", fontsize=FS)
         tk = 0.45 * unit
         for t in axes.get("ticks_x") or []:
             t = float(t)
             ax.plot([t, t], [-tk, tk], color="black", linewidth=0.8)
-            ax.text(t, -1.2 * unit, f"{t:g}".replace("-", "−"), ha="center", va="top", fontsize=9, zorder=4)
+            ax.text(t, -1.2 * unit, f"{t:g}".replace("-", "−"), ha="center", va="top", fontsize=FS_SMALL, zorder=4)
         for t in axes.get("ticks_y") or []:
             t = float(t)
             ax.plot([-tk, tk], [t, t], color="black", linewidth=0.8)
             side = 1 if axes.get("ticks_y_side") == "right" else -1
             ax.text(side * 1.0 * unit, t, f"{t:g}".replace("-", "−"), ha="left" if side > 0 else "right",
-                    va="center", fontsize=9, zorder=4)
+                    va="center", fontsize=FS_SMALL, zorder=4)
 
     for el in spec.get("elements") or []:
         kind = el.get("type")
@@ -278,13 +292,13 @@ def _render(spec: dict) -> tuple[bytes, bytes, float]:
                         ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], zorder=3, **st)
                         if el.get("label"):
                             lx, ly = _pt(el["label_at"]) if el.get("label_at") else seg[1]
-                            ax.text(lx, ly, _label(el["label"]), ha="center", va="center", fontsize=12)
+                            ax.text(lx, ly, _label(el["label"]), ha="center", va="center", fontsize=FS)
             elif kind == "segment":
                 (x1, y1), (x2, y2) = _pt(el["from"]), _pt(el["to"])
                 ax.plot([x1, x2], [y1, y2], zorder=3, **st)
                 if el.get("label"):
                     lx, ly = _pt(el["label_at"]) if el.get("label_at") else ((x1 + x2) / 2, (y1 + y2) / 2)
-                    ax.text(lx, ly, _label(el["label"]), ha="center", va="center", fontsize=11)
+                    ax.text(lx, ly, _label(el["label"]), ha="center", va="center", fontsize=FS)
             elif kind == "polyline":
                 pts = np.array([_pt(p) for p in el["points"]])
                 ax.plot(pts[:, 0], pts[:, 1], zorder=3, **st)
@@ -311,7 +325,7 @@ def _render(spec: dict) -> tuple[bytes, bytes, float]:
                 ax.plot(xs, ys, zorder=3, **st)
                 if el.get("label"):
                     lx, ly = _pt(el["label_at"]) if el.get("label_at") else (xs[-1], ys[-1])
-                    ax.text(lx, ly, _label(el["label"]), ha="left", va="bottom", fontsize=11)
+                    ax.text(lx, ly, _label(el["label"]), ha="left", va="bottom", fontsize=FS)
             elif kind == "angle":
                 vx, vy = _pt(el["vertex"])
                 fx, fy = _pt(el["from"])
@@ -326,7 +340,7 @@ def _render(spec: dict) -> tuple[bytes, bytes, float]:
                     mid = math.radians(t1 + ((t2 - t1) % 360) / 2)
                     lr = r + 2.2 * unit
                     ax.text(vx + lr * math.cos(mid), vy + lr * math.sin(mid), _label(el["label"]),
-                            ha="center", va="center", fontsize=9)
+                            ha="center", va="center", fontsize=FS_SMALL)
             elif kind == "point":
                 x, y = _pt(el["at"])
                 filled = el.get("filled", True)
@@ -335,10 +349,10 @@ def _render(spec: dict) -> tuple[bytes, bytes, float]:
                 if el.get("label"):
                     dx, dy = _OFFS.get(el.get("label_pos", "ne"), (0.8, 0.8))
                     ax.text(x + 1.6 * unit * dx, y + 1.6 * unit * dy, _label(el["label"]),
-                            ha="center", va="center", fontsize=12, zorder=6)
+                            ha="center", va="center", fontsize=FS, zorder=6)
             elif kind == "text":
                 x, y = _pt(el["at"])
-                ax.text(x, y, _label(el.get("text", "")), ha="center", va="center", fontsize=float(el.get("size", 11)))
+                ax.text(x, y, _label(el.get("text", "")), ha="center", va="center", fontsize=float(el.get("size", FS)))
         except (KeyError, TypeError, ValueError, IndexError, SyntaxError, NameError) as exc:
             plt.close(fig)
             raise FigureError(f"Πρόβλημα στο στοιχείο «{kind}» του σχήματος: {exc}") from exc
@@ -351,10 +365,10 @@ def _render(spec: dict) -> tuple[bytes, bytes, float]:
     return svg_buf.getvalue(), png_buf.getvalue(), real_w
 
 
-def render_to_files(spec_json: str, out_base: Path, font: str | None = None) -> dict:
+def render_to_files(spec_json: str, out_base: Path, font: str | None = None, size: float | None = None) -> dict:
     """Σχεδιάζει και γράφει out_base.svg / out_base.png. Επιστρέφει πληροφορίες και προειδοποιήσεις."""
     spec = parse_spec(spec_json)
-    svg, png, width = render(spec, font)
+    svg, png, width = render(spec, font, size)
     out_base.parent.mkdir(parents=True, exist_ok=True)
     svg_p, png_p = out_base.with_suffix(".svg"), out_base.with_suffix(".png")
     svg_p.write_bytes(svg)

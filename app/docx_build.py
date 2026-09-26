@@ -430,6 +430,8 @@ class PageSetup:
     font_size: float = 12  # pt
     class_name: str = ""  # υποσέλιδο αριστερά
     editor: str = ""  # υποσέλιδο δεξιά: «Επιμέλεια: …»
+    math_font: str = "Cambria Math"  # εξισώσεις (και ετικέτες σχημάτων)
+    math_size: float = 12  # pt
 
 
 def _set_run_fonts(rpr, font: str, half_points: int) -> None:
@@ -463,6 +465,57 @@ def _apply_fonts(styles_xml: bytes, font: str, size_pt: float) -> bytes:
         if st.get(W + "type") not in ("paragraph", "character", "table"):
             continue
         _set_run_fonts(_get_or_insert(st, "rPr", _STYLE_ORDER), font, hp)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+M = "{%s}" % M_NS
+
+# σειρά στοιχείων του w:settings (όσα μπορεί να ακολουθούν το m:mathPr)
+_AFTER_MATHPR = ["attachedSchema", "themeFontLang", "clrSchemeMapping", "doNotIncludeSubdocsInStats",
+                 "doNotAutoCompressPictures", "forceUpgrade", "captions", "readModeInkLockDown", "smartTagType",
+                 "schemaLibrary", "shapeDefaults", "doNotEmbedSmartTags", "decimalSymbol", "listSeparator"]
+
+
+def _apply_math_settings(settings_xml: bytes, math_font: str) -> bytes:
+    """Προεπιλεγμένη γραμματοσειρά εξισώσεων του εγγράφου (Word: Επιλογές εξίσωσης → Προεπιλεγμένη γραμματοσειρά)."""
+    root = etree.fromstring(settings_xml)
+    mathpr = root.find(M + "mathPr")
+    if mathpr is None:
+        mathpr = etree.Element(M + "mathPr", nsmap={"m": M_NS})
+        anchor = next((c for c in root if etree.QName(c).localname in _AFTER_MATHPR
+                       and etree.QName(c).namespace == NS["w"]), None)
+        if anchor is not None:
+            anchor.addprevious(mathpr)
+        else:
+            root.append(mathpr)
+    mf = mathpr.find(M + "mathFont")
+    if mf is None:
+        mf = etree.Element(M + "mathFont")
+        mathpr.insert(0, mf)  # το m:mathFont είναι το πρώτο στοιχείο του m:mathPr
+    mf.set(M + "val", math_font)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _apply_math_runs(doc_xml: bytes, math_font: str, size_pt: float) -> bytes:
+    """Γραμματοσειρά/μέγεθος σε κάθε τμήμα εξίσωσης (m:r) και στα στοιχεία ελέγχου (κλάσματα, ρίζες…)."""
+    root = etree.fromstring(doc_xml)
+    hp = int(round(size_pt * 2))
+    for mr in root.iter(M + "r"):
+        rpr = mr.find(W + "rPr")
+        if rpr is None:
+            rpr = etree.Element(W + "rPr")
+            mrpr = mr.find(M + "rPr")  # σειρά μέσα στο m:r: m:rPr, w:rPr, m:t
+            if mrpr is not None:
+                mrpr.addnext(rpr)
+            else:
+                mr.insert(0, rpr)
+        _set_run_fonts(rpr, math_font, hp)
+    for ctrl in root.iter(M + "ctrlPr"):
+        rpr = ctrl.find(W + "rPr")
+        if rpr is None:
+            rpr = etree.SubElement(ctrl, W + "rPr")
+        _set_run_fonts(rpr, math_font, hp)
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
@@ -632,6 +685,9 @@ def postprocess(docx_path: Path, figures: list[Figure], setup: PageSetup | None 
     _embed_svgs(files, figures)
     files["word/styles.xml"] = _apply_fonts(files["word/styles.xml"], setup.font_name, setup.font_size)
     files["word/document.xml"] = _apply_run_fonts(files["word/document.xml"], setup.font_name, setup.font_size)
+    files["word/document.xml"] = _apply_math_runs(files["word/document.xml"], setup.math_font, setup.math_size)
+    if "word/settings.xml" in files:
+        files["word/settings.xml"] = _apply_math_settings(files["word/settings.xml"], setup.math_font)
     _install_header_footer(files, setup)
     files["word/document.xml"] = _normalize_order(files["word/document.xml"])
     tmp = docx_path.with_suffix(".tmp.docx")

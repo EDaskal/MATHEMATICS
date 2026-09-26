@@ -80,6 +80,21 @@ def run(report_path: str | None = None) -> int:
 
     check("version-docs", version_docs)
 
+    def fonts():
+        import os
+
+        from .fonts import font_dirs, scan
+
+        r = scan(refresh=True)
+        if r["count"] == 0 or not r["text"]:
+            raise RuntimeError(f"δεν βρέθηκαν γραμματοσειρές στους φακέλους {font_dirs()}")
+        if os.name == "nt" and not any(f["greek"] for f in r["text"]):
+            raise RuntimeError("καμία γραμματοσειρά με ελληνικά — πρόβλημα στην ανάγνωση των γραμματοσειρών")
+        cm = "ναι" if any(n.lower() == "cambria math" for n in r["math"]) else "όχι"
+        return f"{len(r['text'])} οικογένειες, {len(r['math'])} μαθηματικών (Cambria Math: {cm})"
+
+    check("fonts", fonts)
+
     def build():
         from .docx_build import build_docx
         from .figures import render_to_files
@@ -98,7 +113,8 @@ def run(report_path: str | None = None) -> int:
             from .docx_build import PageSetup
 
             out = tdp / "selftest.docx"
-            res = build_docx(exam, out, setup=PageSetup("Cambria", 12, "Β’ ΛΥΚΕΙΟΥ ΑΛΓΕΒΡΑ", "Αυτοέλεγχος"))
+            res = build_docx(exam, out, setup=PageSetup("Cambria", 12, "Β’ ΛΥΚΕΙΟΥ ΑΛΓΕΒΡΑ", "Αυτοέλεγχος",
+                                                        "Cambria Math", 12))
             expected, found = res["math"]
             if expected <= 0 or expected != found:
                 raise RuntimeError(f"εξισώσεις: γράφτηκαν {expected}, διαβάστηκαν {found}")
@@ -118,6 +134,9 @@ def run(report_path: str | None = None) -> int:
                 styles = z.read("word/styles.xml").decode("utf-8")
                 if 'w:ascii="Cambria"' not in styles:
                     raise RuntimeError("δεν εφαρμόστηκε η γραμματοσειρά")
+                settings = z.read("word/settings.xml").decode("utf-8")
+                if 'm:mathFont m:val="Cambria Math"' not in settings or 'w:ascii="Cambria Math"' not in doc:
+                    raise RuntimeError("δεν εφαρμόστηκε η γραμματοσειρά μαθηματικών")
             return f"{expected} εξισώσεις, {len(res['warnings'])} προειδοποιήσεις"
 
     check("build-docx", build)

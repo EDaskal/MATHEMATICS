@@ -164,18 +164,40 @@
       <button class="btn ghost" id="s-template-reset">Ενσωματωμένο πρότυπο</button>
     </div>
     <p class="muted small">Από το πρότυπο κρατιούνται τα περιθώρια, το μέγεθος σελίδας και τα στυλ παραγράφων. Το κείμενό του αγνοείται.
-      Κεφαλίδα («Σελίδα X από Y» στο κέντρο), υποσέλιδο (Τάξη και Επιμέλεια) και γραμματοσειρά τα ορίζει πάντα η εφαρμογή.</p>
+      Κεφαλίδα («Σελίδα X από Y» στο κέντρο), υποσέλιδο (Τάξη και Επιμέλεια) και γραμματοσειρές τα ορίζει πάντα η εφαρμογή.</p>
     <div class="kv"><span>Φάκελος αποθήκευσης</span><span id="s-outdir"></span></div>
     <div class="row"><button class="btn" id="s-outdir-choose">Αλλαγή φακέλου…</button></div>
+    <h3>Γραμματοσειρές</h3>
+    <p class="muted small">Ισχύουν για όλο το έγγραφο, ανεξάρτητα από το πρότυπο. Οι λίστες δείχνουν τις γραμματοσειρές που είναι
+      εγκατεστημένες σε αυτόν τον υπολογιστή. <span id="s-fonts-status"></span>
+      <button class="btn small ghost" id="s-fonts-refresh" type="button" title="Νέα ανάγνωση, π.χ. μετά την εγκατάσταση νέας γραμματοσειράς">↻ Ανανέωση λίστας</button></p>
     <div class="grid2">
-      <label>Γραμματοσειρά
-        <input id="s-font" list="fonts" type="text">
+      <label>Γραμματοσειρά κειμένου
+        <input id="s-font" list="fonts" type="text" autocomplete="off">
         <datalist id="fonts"></datalist>
-        <span class="muted small">Σε όλο το έγγραφο, κεφαλίδα, υποσέλιδο και σχήματα, ανεξάρτητα από το πρότυπο. Οι εξισώσεις μένουν σε Cambria Math.</span>
+        <span class="muted small">Κείμενο, τίτλοι, κεφαλίδα, υποσέλιδο, μονάδες, επιλογές Α–Δ.</span>
+        <span class="field-warn" id="s-font-warn"></span>
       </label>
-      <label>Μέγεθος (pt)
+      <label>Μέγεθος κειμένου (pt)
         <select id="s-size"></select>
       </label>
+      <label>Γραμματοσειρά μαθηματικών
+        <input id="s-math-font" list="math-fonts" type="text" autocomplete="off">
+        <datalist id="math-fonts"></datalist>
+        <span class="muted small">Εξισώσεις και ετικέτες σχημάτων/διαγραμμάτων. Το Word δέχεται μόνο γραμματοσειρές μαθηματικών (με πίνακα MATH).</span>
+        <span class="field-warn" id="s-math-warn"></span>
+      </label>
+      <label>Μέγεθος μαθηματικών (pt)
+        <select id="s-math-size"></select>
+      </label>
+    </div>
+    <details id="s-math-recommend">
+      <summary class="small">Άλλες γραμματοσειρές μαθηματικών με ελληνικά (δωρεάν)</summary>
+      <div class="small muted">Για να εμφανιστούν στη λίστα, κατεβάστε και εγκαταστήστε τη γραμματοσειρά
+        (δεξί κλικ στο αρχείο → Εγκατάσταση) και πατήστε «↻ Ανανέωση λίστας».</div>
+      <div class="doc" id="s-math-recommend-list"></div>
+    </details>
+    <div class="grid2">
       <label>Υπο-ερωτήματα
         <select id="s-sublevel"><option value="roman">i), ii), iii)</option><option value="bullet">Κουκκίδες</option></select>
       </label>

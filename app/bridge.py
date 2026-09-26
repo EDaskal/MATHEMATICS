@@ -58,6 +58,16 @@ class Api:
         self._session_dir = work_dir() / datetime.now().strftime("%Y%m%d-%H%M%S")
         self._session_dir.mkdir(parents=True, exist_ok=True)
         self._cleanup_old_sessions()
+        # σάρωση γραμματοσειρών στο παρασκήνιο: οι Ρυθμίσεις ανοίγουν αμέσως με έτοιμη λίστα
+        threading.Thread(target=self._warm_fonts, daemon=True).start()
+
+    def _warm_fonts(self) -> None:
+        try:
+            from .fonts import scan
+
+            scan()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------ υποδομή
 
@@ -256,7 +266,7 @@ class Api:
 
         base = self._session_dir / f"fig_{key}_{uuid.uuid4().hex[:6]}"
         try:
-            info = render_to_files(spec_json, base, font=self._settings.font_name)
+            info = render_to_files(spec_json, base, font=self._settings.math_font, size=self._settings.math_size)
             info["png_data"] = _data_url(info["png"])
             info["error"] = None
             return info
@@ -312,7 +322,7 @@ class Api:
                 if fr and fr.get("mode") == "redraw" and fr.get("spec_json"):
                     try:
                         info = render_to_files(fr["spec_json"], self._session_dir / f"final_{ti}_{ei}_{uuid.uuid4().hex[:4]}",
-                                               font=s.font_name)
+                                               font=s.math_font, size=s.math_size)
                         ex["figure_render"] = info
                     except FigureError as exc:
                         warnings.append(f"Σχήμα θέματος {ti + 1}: {exc}")
@@ -326,7 +336,8 @@ class Api:
             out = out_dir / f"{name} ({i}).docx"
             i += 1
         setup = PageSetup(font_name=s.font_name or "Cambria", font_size=float(s.font_size or 12),
-                          class_name=exam.get("class_name", ""), editor=exam.get("editor", ""))
+                          class_name=exam.get("class_name", ""), editor=exam.get("editor", ""),
+                          math_font=s.math_font or "Cambria Math", math_size=float(s.math_size or 12))
         try:
             res = build_docx(exam, out, template=s.template_path, sublevel_style=s.sublevel_style,
                              points_align=s.points_align, setup=setup)
@@ -400,6 +411,15 @@ class Api:
                 os._exit(0)
 
         threading.Timer(1.5, _quit).start()
+
+    def list_fonts(self, refresh: bool = False) -> dict:
+        """Εγκατεστημένες γραμματοσειρές (κειμένου με ένδειξη ελληνικών, μαθηματικών με πίνακα MATH)."""
+        from .fonts import scan
+
+        try:
+            return scan(refresh=bool(refresh))
+        except Exception as exc:  # noqa: BLE001
+            return {"text": [], "math": [], "count": 0, "error": str(exc)}
 
     def forget_value(self, list_name: str, value: str) -> dict:
         """Αφαίρεση τιμής από αποθηκευμένη λίστα (τάξεις/επιμελητές)."""

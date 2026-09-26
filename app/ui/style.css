@@ -285,3 +285,5 @@ label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 4
 a { color: var(--accent); }
 .exlab { white-space: nowrap; }
 .exblock-head .small { white-space: nowrap; }
+.field-warn { color: var(--amber); font-size: 12px; font-weight: 400; }
+.field-warn:empty { display: none; }

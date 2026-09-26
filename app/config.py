@@ -37,8 +37,10 @@ class Settings:
     template_path: str = ""  # κενό = το ενσωματωμένο πρότυπο
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     # Μορφή εγγράφου (επιβάλλεται ανεξάρτητα από το πρότυπο)
-    font_name: str = "Cambria"
+    font_name: str = "Cambria"  # γραμματοσειρά κειμένου
     font_size: float = 12.0
+    math_font: str = "Cambria Math"  # γραμματοσειρά εξισώσεων, σχημάτων, διαγραμμάτων
+    math_size: float = 12.0
     # Υποσέλιδο: αποθηκευμένες λίστες και τελευταία επιλογή
     classes: list = field(default_factory=list)
     editors: list = field(default_factory=list)

@@ -13,3 +13,7 @@ app/resources/docs/
 build/version_info.txt
 notes.md
 selftest.txt
+
+# Mac: αρχεία του Finder
+.DS_Store
+._*
