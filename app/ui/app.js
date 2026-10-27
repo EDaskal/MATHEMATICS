@@ -25,7 +25,8 @@ let MODE = "http";
 const api = new Proxy({}, {
   get: (_, name) => async (...args) => {
     if (MODE === "pywebview") return window.pywebview.api[name](...args);
-    const r = await fetch(`/api/${name}`, { method: "POST", body: JSON.stringify(args) });
+    const r = await fetch(`/api/${name}`, { method: "POST", body: JSON.stringify(args),
+      headers: { "X-Api-Token": new URLSearchParams(location.search).get("k") || "" } });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || "Σφάλμα");
     return j.result;

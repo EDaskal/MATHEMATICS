@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sys
 import threading
 import webbrowser
@@ -18,9 +19,23 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "app"  # noqa: A001
 
-from app import APP_TITLE  # noqa: E402
+from app import APP_TITLE, __version__  # noqa: E402
 from app.bridge import Api  # noqa: E402
 from app.paths import resource  # noqa: E402
+
+
+def _start_ui_server(api: Api) -> str:
+    """Η οθόνη σερβίρεται από δικό μας τοπικό server, σε τυχαία θύρα και με «Cache-Control: no-store».
+
+    Μέχρι την 1.4.1 τη σέρβιρε ο server του pywebview σε σταθερή θύρα (42001) χωρίς οδηγία cache,
+    οπότε μετά από ενημέρωση το WebView2 μπορούσε να δείχνει την ΠΑΛΙΑ οθόνη (π.χ. χωρίς το Corpus).
+    """
+    _Handler.api = api
+    _Handler.token = secrets.token_urlsafe(16)  # οι κλήσεις /api/ μόνο από τη δική μας οθόνη
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}/index.html?v={__version__}&k={_Handler.token}"
 
 
 def run_window(api: Api) -> None:
@@ -28,7 +43,7 @@ def run_window(api: Api) -> None:
 
     window = webview.create_window(
         APP_TITLE,
-        url=str(resource("ui", "index.html")),
+        url=_start_ui_server(api),
         js_api=api,
         width=1320,
         height=900,
@@ -45,6 +60,7 @@ def run_window(api: Api) -> None:
 class _Handler(BaseHTTPRequestHandler):
     api: Api = None  # type: ignore[assignment]
     root: Path = resource("ui")
+    token: str | None = None  # αν οριστεί, οι κλήσεις /api/ θέλουν την κεφαλίδα X-Api-Token
 
     def log_message(self, *_):  # σιωπηλός server
         pass
@@ -63,13 +79,16 @@ class _Handler(BaseHTTPRequestHandler):
         if not str(target).startswith(str(self.root.resolve())) or not target.is_file():
             return self._send(404, b"not found", "text/plain")
         types = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                 ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".svg": "image/svg+xml",
-                 ".png": "image/png"}
+                 ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".woff": "font/woff",
+                 ".ttf": "font/ttf", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
+                 ".json": "application/json; charset=utf-8"}
         self._send(200, target.read_bytes(), types.get(target.suffix, "application/octet-stream"))
 
     def do_POST(self):  # noqa: N802
         if not self.path.startswith("/api/"):
             return self._send(404, b"not found", "text/plain")
+        if self.token and not secrets.compare_digest(self.headers.get("X-Api-Token") or "", self.token):
+            return self._send(403, b"forbidden", "text/plain")
         name = self.path[len("/api/"):]
         length = int(self.headers.get("Content-Length") or 0)
         args = json.loads(self.rfile.read(length) or b"[]")

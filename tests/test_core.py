@@ -436,3 +436,28 @@ def test_exam_columns_and_minus(tmp_path):
     with zipfile.ZipFile(out) as z:
         xml = z.read("word/document.xml").decode()
     assert "  " in xml and "⇥" not in xml and "−" not in xml
+
+
+# ------------------------------------------------------------------ 1.4.2: η οθόνη χωρίς παλιά cache
+
+def test_ui_server_no_store_and_token(tmp_path, monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from app import __version__
+    from app.bridge import Api
+    from app.main import _start_ui_server
+
+    url = _start_ui_server(Api())
+    assert f"v={__version__}" in url and "&k=" in url
+    r = urllib.request.urlopen(url)
+    assert "no-store" in r.headers.get("Cache-Control", "")
+    assert 'data-mode="corpus"' in r.read().decode("utf-8")
+    base = url.split("/index.html")[0]
+    token = url.split("&k=")[1]
+    with pytest.raises(urllib.error.HTTPError) as e:  # χωρίς κλειδί: απαγορεύεται
+        urllib.request.urlopen(urllib.request.Request(base + "/api/get_state", data=b"[]", method="POST"))
+    assert e.value.code == 403
+    req = urllib.request.Request(base + "/api/get_state", data=b"[]", method="POST", headers={"X-Api-Token": token})
+    assert json.loads(urllib.request.urlopen(req).read())["result"]["version"] == __version__
