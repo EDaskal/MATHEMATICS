@@ -321,8 +321,10 @@ async function phoneOpen() {
     showQr(res);
     const sel = $("#phone-urls");
     sel.innerHTML = "";
-    sel.hidden = (res.urls || []).length < 2;
-    for (const u of res.urls || []) sel.append(el("option", { value: u, text: `Άλλη διεύθυνση δικτύου: ${u}` }));
+    const choices = res.choices || (res.urls || []).map((u) => ({ url: u, label: u }));
+    sel.hidden = false;
+    $("#phone-urls-wrap").hidden = choices.length < 2;
+    for (const c of choices) sel.append(el("option", { value: c.url, text: `Δίκτυο: ${c.label}` }));
     sel.onchange = async () => showQr(await api.phone_qr(sel.value));
   }
   $("#phone-count").textContent = S.phone.count;

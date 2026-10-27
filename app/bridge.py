@@ -429,14 +429,16 @@ class Api:
             if getattr(self, "_phone", None) is None:
                 self._phone = PhoneServer(self._phone_image)
             self._phone.start()
-            urls = self._phone.urls()
+            choices = self._phone.choices()
+            urls = [u for u, _ in choices]
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
         if not urls:
             self._phone.stop()
             return {"ok": False, "error": "Ο υπολογιστής δεν φαίνεται συνδεδεμένος σε τοπικό δίκτυο (Wi-Fi ή καλώδιο). "
                                           "Συνδέστε τον στο ίδιο δίκτυο με το κινητό και ξαναδοκιμάστε."}
-        return {"ok": True, "url": urls[0], "urls": urls, "qr": qr_svg(urls[0]), "count": self._phone.count}
+        return {"ok": True, "url": urls[0], "urls": urls, "choices": [{"url": u, "label": l} for u, l in choices],
+                "qr": qr_svg(urls[0]), "count": self._phone.count}
 
     def phone_qr(self, url: str) -> dict:
         from .phone import qr_svg

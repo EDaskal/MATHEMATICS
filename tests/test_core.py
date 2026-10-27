@@ -461,3 +461,34 @@ def test_ui_server_no_store_and_token(tmp_path, monkeypatch):
     assert e.value.code == 403
     req = urllib.request.Request(base + "/api/get_state", data=b"[]", method="POST", headers={"X-Api-Token": token})
     assert json.loads(urllib.request.urlopen(req).read())["result"]["version"] == __version__
+
+
+# ------------------------------------------------------------------ 1.4.3: σωστή κάρτα δικτύου για το QR
+
+def test_phone_prefers_real_network_over_virtualbox(monkeypatch):
+    """Σταθερός υπολογιστής με καλώδιο σε δίκτυο 20.20.1.x και εγκατεστημένο VirtualBox (192.168.56.1)."""
+    import socket as _socket
+
+    from app import phone
+
+    monkeypatch.setattr(phone, "_default_route_ip", lambda: "20.20.1.45")
+    monkeypatch.setattr(phone, "_windows_adapters",
+                        lambda: {"192.168.56.1": "VirtualBox Host-Only Network", "20.20.1.45": "Ethernet",
+                                 "172.22.80.1": "vEthernet (WSL)", "127.0.0.1": "Loopback Pseudo-Interface 1"})
+    monkeypatch.setattr(_socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("192.168.56.1", 0))])
+    addrs = phone.lan_addresses()
+    assert [ip for ip, _ in addrs] == ["20.20.1.45", "192.168.56.1", "172.22.80.1"]
+    assert "Ethernet" in addrs[0][1] and "κύρια" in addrs[0][1]
+    assert "όχι αυτή" in addrs[1][1]
+
+
+def test_phone_virtualbox_last_without_adapter_names(monkeypatch):
+    import socket as _socket
+
+    from app import phone
+
+    monkeypatch.setattr(phone, "_default_route_ip", lambda: None)
+    monkeypatch.setattr(phone, "_windows_adapters", lambda: {})
+    monkeypatch.setattr(_socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("192.168.56.1", 0)),
+                                                                   (0, 0, 0, "", ("20.20.1.45", 0))])
+    assert phone.lan_ips() == ["20.20.1.45", "192.168.56.1"]

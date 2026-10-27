@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import secrets
 import socket
 import threading
@@ -26,19 +27,25 @@ DEFAULT_PORT = 8766
 MAX_BYTES = 40 * 1024 * 1024
 
 
-def _is_lan(ip: str) -> bool:
+_VIRTUAL_HINTS = ("virtualbox", "vmware", "vethernet", "hyper-v", "wsl", "docker", "loopback", "bluetooth",
+                  "vpn", "tap-", "tunnel", "zerotier", "tailscale", "npcap")
+
+
+def _usable(ip: str) -> bool:
+    """IPv4 που μπορεί να είναι διεύθυνση στο τοπικό δίκτυο. ΔΕΝ απαιτείται «ιδιωτικό» εύρος:
+    υπάρχουν δίκτυα (π.χ. 20.20.1.x) που χρησιμοποιούν άλλες διευθύνσεις εσωτερικά."""
     try:
         a = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return a.version == 4 and a.is_private and not a.is_loopback and not a.is_link_local
+    return (a.version == 4 and not a.is_loopback and not a.is_link_local and not a.is_unspecified
+            and not a.is_multicast)
 
 
-def lan_ips() -> list[str]:
-    """Οι διευθύνσεις IPv4 του υπολογιστή στο τοπικό δίκτυο, η πιθανότερη πρώτη."""
-    found: list[str] = []
-    # η διεπαφή της προεπιλεγμένης διαδρομής (δεν στέλνεται κανένα πακέτο με UDP connect)
-    for probe in ("10.255.255.255", "192.168.255.255", "8.8.8.8"):
+def _default_route_ip() -> str | None:
+    """Η διεύθυνση της κάρτας από την οποία βγαίνει η κίνηση (η «κύρια» σύνδεση, Wi-Fi ή καλώδιο).
+    Με UDP connect δεν στέλνεται κανένα πακέτο."""
+    for probe in ("8.8.8.8", "1.1.1.1", "10.255.255.255", "192.168.255.255"):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
@@ -46,20 +53,78 @@ def lan_ips() -> list[str]:
                 ip = s.getsockname()[0]
             finally:
                 s.close()
-            if _is_lan(ip) and ip not in found:
-                found.append(ip)
+            if _usable(ip):
+                return ip
         except OSError:
-            pass
+            continue
+    return None
+
+
+def _windows_adapters() -> dict[str, str]:
+    """Windows: διεύθυνση → όνομα κάρτας δικτύου (π.χ. «Ethernet», «VirtualBox Host-Only Network»)."""
+    if os.name != "nt":
+        return {}
+    import subprocess
+
+    cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+           "Get-NetIPAddress -AddressFamily IPv4 | Select-Object IPAddress,InterfaceAlias | ConvertTo-Json -Compress"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        data = json.loads(res.stdout or "[]")
+    except Exception:  # noqa: BLE001
+        return {}
+    if isinstance(data, dict):
+        data = [data]
+    return {str(d.get("IPAddress")): str(d.get("InterfaceAlias") or "") for d in data if d.get("IPAddress")}
+
+
+def _is_virtual(ip: str, alias: str) -> bool:
+    low = (alias or "").lower()
+    if any(h in low for h in _VIRTUAL_HINTS):
+        return True
+    return ip.startswith("192.168.56.")  # προεπιλεγμένο δίκτυο του VirtualBox (host-only)
+
+
+def lan_addresses() -> list[tuple[str, str]]:
+    """[(διεύθυνση, περιγραφή)] — η πιθανότερη πρώτη: η κάρτα της κύριας σύνδεσης, μετά οι άλλες
+    πραγματικές κάρτες και στο τέλος οι εικονικές (VirtualBox, Hyper-V/WSL, VPN κ.λπ.)."""
+    names = _windows_adapters()
+    found: list[str] = []
+    primary = _default_route_ip()
+    if primary:
+        found.append(primary)
+    for ip in names:
+        if _usable(ip) and ip not in found:
+            found.append(ip)
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ip = info[4][0]
-            if _is_lan(ip) and ip not in found:
+            if _usable(ip) and ip not in found:
                 found.append(ip)
     except OSError:
         pass
-    # προτίμηση στα συνηθισμένα οικιακά δίκτυα (192.168.x.x), μετά 10.x, μετά 172.16–31
-    order = lambda ip: (0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2)  # noqa: E731
-    return sorted(found, key=order)
+
+    def rank(ip: str) -> tuple:
+        virtual = _is_virtual(ip, names.get(ip, ""))
+        return (virtual, ip != primary)
+
+    out = []
+    for ip in sorted(found, key=rank):
+        alias = names.get(ip, "")
+        if _is_virtual(ip, alias):
+            label = f"{alias or 'εικονική κάρτα'} (μάλλον όχι αυτή)"
+        elif ip == primary:
+            label = f"{alias} (κύρια σύνδεση)" if alias else "κύρια σύνδεση"
+        else:
+            label = alias or "άλλη κάρτα δικτύου"
+        out.append((ip, label))
+    return out
+
+
+def lan_ips() -> list[str]:
+    """Οι διευθύνσεις IPv4 του υπολογιστή στο τοπικό δίκτυο, η πιθανότερη πρώτη."""
+    return [ip for ip, _ in lan_addresses()]
 
 
 def qr_svg(text: str, scale: int = 6) -> str:
@@ -111,7 +176,10 @@ class PhoneServer:
         self.count = 0
 
     def urls(self) -> list[str]:
-        return [f"http://{ip}:{self.port}/m/{self.token}" for ip in lan_ips()]
+        return [u for u, _ in self.choices()]
+
+    def choices(self) -> list[tuple[str, str]]:
+        return [(f"http://{ip}:{self.port}/m/{self.token}", f"{ip} — {label}") for ip, label in lan_addresses()]
 
     # ------------------------------------------------------------------ HTTP
     def _handler(self):
