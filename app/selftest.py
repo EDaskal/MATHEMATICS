@@ -141,6 +141,43 @@ def run(report_path: str | None = None) -> int:
 
     check("build-docx", build)
 
+    def corpus():
+        from .corpus_doc import insert_into, outline_of, sample_document
+
+        ex = {"stem": "Δίνεται η ευθεία $y=2x+1$. Να βρείτε:", "closing": "", "figure": None,
+              "items": [{"label": "α", "text": "τον συντελεστή $\\lambda$", "choices": None, "items": []}]}
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            doc = sample_document(tdp / "corpus.docx", tdp)
+            key = {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}
+            insert_into(doc, key, [ex, ex], tdp)
+            info = insert_into(doc, key, [ex], tdp)
+            counts = {h["title"]: h["exercises"] for h in outline_of(doc)}
+            if counts.get("ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ") != 3 or info["last_label"] != "3." or not info.get("backup"):
+                raise RuntimeError(f"λάθος εισαγωγή: {counts}, {info}")
+            return f"3 ασκήσεις, αρίθμηση έως {info['last_label']}, αντίγραφο ασφαλείας OK"
+
+    check("corpus", corpus)
+
+    def phone():
+        import urllib.request
+
+        from .phone import PhoneServer, lan_ips, qr_svg
+
+        if not qr_svg("http://192.168.1.10:8766/m/test").startswith("<svg"):
+            raise RuntimeError("δεν δημιουργήθηκε QR")
+        srv = PhoneServer(lambda *_: {"ok": True})
+        port = srv.start(port=0)
+        try:
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/m/{srv.token}", timeout=10).read().decode("utf-8")
+            if "Φωτογράφιση" not in page:
+                raise RuntimeError("λείπει η σελίδα του κινητού")
+        finally:
+            srv.stop()
+        return f"QR OK, σελίδα κινητού OK, διευθύνσεις δικτύου: {', '.join(lan_ips()) or 'καμία (εκτός δικτύου)'}"
+
+    check("phone", phone)
+
     lines.append("RESULT: " + ("PASS" if ok else "FAIL"))
     text = "\n".join(lines)
     if report_path:

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f5d9e">
+<title>Φωτογραφίες ασκήσεων</title>
+<style>
+  :root { --bg: #f5f6f8; --card: #fff; --ink: #1d2433; --muted: #6a7385; --line: #dde1e8; --accent: #2f5d9e;
+          --accent-soft: #e8eff9; --ok: #2e7d4f; --warn: #b3261e; --warn-soft: #fdecea; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1c2027; --ink: #e4e8ef; --muted: #98a1b0; --line: #313844; --accent: #7aa7ec;
+            --accent-soft: #22324a; --ok: #6cc28f; --warn: #f08b82; --warn-soft: #3a2120; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink);
+         padding: max(14px, env(safe-area-inset-top)) 14px max(24px, env(safe-area-inset-bottom)); }
+  h1 { font-size: 19px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .logo { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: #fff; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 12px 0; }
+  .target { font-size: 15px; }
+  .target b { color: var(--accent); }
+  .big { display: block; width: 100%; border: 0; border-radius: 12px; padding: 18px 12px; font: inherit; font-size: 18px; font-weight: 600;
+         margin: 10px 0; cursor: pointer; }
+  .primary { background: var(--accent); color: #fff; }
+  .secondary { background: var(--accent-soft); color: var(--accent); }
+  label.join { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; padding: 6px 2px; }
+  label.join input { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .item { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; aspect-ratio: 3 / 4; }
+  .item img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .item .st { position: absolute; left: 0; right: 0; bottom: 0; font-size: 12px; padding: 3px 5px; color: #fff; background: rgba(0,0,0,.55); }
+  .item.ok .st { background: rgba(46,125,79,.9); }
+  .item.err .st { background: rgba(179,38,30,.92); }
+  .item.join { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .error { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 14px; display: none; }
+  .count { font-weight: 600; color: var(--ok); }
+</style>
+</head>
+<body>
+  <h1><span class="logo">∑</span> Φωτογραφίες ασκήσεων</h1>
+  <div class="muted">Γεννήτρια Διαγωνισμάτων — οι φωτογραφίες φτάνουν αμέσως στον υπολογιστή.</div>
+
+  <div class="card target" id="target">Σύνδεση με τον υπολογιστή…</div>
+  <div class="error" id="error"></div>
+
+  <button class="big primary" id="btn-camera">📷 Φωτογράφιση</button>
+  <button class="big secondary" id="btn-gallery">🖼 Από τις φωτογραφίες (πολλές μαζί)</button>
+  <input type="file" id="in-camera" accept="image/*" capture="environment" hidden>
+  <input type="file" id="in-gallery" accept="image/*" multiple hidden>
+
+  <div class="card">
+    <label class="join"><input type="checkbox" id="join">
+      <span>Η επόμενη φωτογραφία είναι <b>συνέχεια</b> της προηγούμενης (η ίδια άσκηση συνεχίζει στην επόμενη σελίδα)</span></label>
+    <div class="muted">Συμβουλή: κρατήστε το κινητό παράλληλα με τη σελίδα, με καλό φως και χωρίς σκιές. Μία φωτογραφία
+      μπορεί να έχει πολλές ασκήσεις.</div>
+  </div>
+
+  <div class="muted" id="summary"></div>
+  <div class="list" id="list"></div>
+
+<script>
+const base = location.pathname.replace(/\/+$/, "");
+const $ = (s) => document.querySelector(s);
+let queue = Promise.resolve();
+let sent = 0;
+let shot = 0;
+
+function showError(msg) { const e = $("#error"); e.textContent = msg; e.style.display = msg ? "block" : "none"; }
+
+async function status() {
+  try {
+    const r = await fetch(base + "/status", { cache: "no-store" });
+    const j = await r.json();
+    $("#target").innerHTML = j.target
+      ? `Οι φωτογραφίες πάνε στο: <b>${escapeHtml(j.target)}</b>`
+      : "Συνδέθηκε με τον υπολογιστή. Οι φωτογραφίες πάνε εκεί που δείχνει η εφαρμογή.";
+    showError("");
+  } catch (_) {
+    showError("Δεν απαντά ο υπολογιστής. Είναι στο ίδιο Wi-Fi; Είναι ανοιχτή η εφαρμογή; Αν πατήθηκε «Διακοπή», σκανάρετε ξανά το νέο QR.");
+  }
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+/** Σμίκρυνση και μετατροπή σε JPEG στο κινητό: γρηγορότερη αποστολή, σωστός προσανατολισμός. */
+function toJpeg(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const max = 2400;
+      const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.naturalWidth * k);
+      c.height = Math.round(img.naturalHeight * k);
+      const g = c.getContext("2d");
+      g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.9));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => resolve(null);
+      fr.readAsDataURL(file);
+    };
+    img.src = url;
+  });
+}
+
+function addTile(join) {
+  const d = document.createElement("div");
+  d.className = "item" + (join ? " join" : "");
+  d.innerHTML = '<div class="st">⏳ ετοιμάζεται…</div>';
+  $("#list").prepend(d);
+  return d;
+}
+
+async function upload(file, join, tile) {
+  const st = tile.querySelector(".st");
+  const data = await toJpeg(file);
+  if (!data) { tile.className = "item err"; st.textContent = "✕ δεν ανοίγει"; return; }
+  const im = document.createElement("img"); im.src = data; tile.prepend(im);
+  st.textContent = "⏳ αποστολή…";
+  const generic = /^(image|img|photo)[-_ ]?\d*\.(jpe?g|png|heic)$/i.test(file.name || "");
+  const name = !file.name || generic ? `Κινητό ${++shot}` : file.name;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(base + "/upload", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, data, join }) });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "Σφάλμα");
+      tile.className = "item ok" + (join ? " join" : "");
+      st.textContent = join ? "✓ συνέχεια" : "✓ στάλθηκε";
+      sent++;
+      $("#summary").innerHTML = `<span class="count">${sent} ${sent === 1 ? "φωτογραφία στάλθηκε" : "φωτογραφίες στάλθηκαν"}</span>`;
+      showError("");
+      return;
+    } catch (e) {
+      if (attempt === 1) {
+        tile.className = "item err";
+        st.textContent = "✕ πατήστε για νέα προσπάθεια";
+        tile.onclick = () => { tile.onclick = null; tile.className = "item"; queue = queue.then(() => upload(file, join, tile)); };
+        showError("Η αποστολή απέτυχε: " + (e.message || e) + ". Ελέγξτε ότι κινητό και υπολογιστής είναι στο ίδιο Wi-Fi.");
+      }
+    }
+  }
+}
+
+function handle(files) {
+  const list = Array.from(files || []).filter((f) => !f.type || f.type.startsWith("image/"));
+  list.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  for (const f of list) {
+    const join = $("#join").checked;
+    $("#join").checked = false; // η «συνέχεια» ισχύει για μία φωτογραφία
+    const tile = addTile(join);
+    queue = queue.then(() => upload(f, join, tile));
+  }
+}
+
+$("#btn-camera").onclick = () => $("#in-camera").click();
+$("#btn-gallery").onclick = () => $("#in-gallery").click();
+$("#in-camera").onchange = (e) => { handle(e.target.files); e.target.value = ""; };
+$("#in-gallery").onchange = (e) => { handle(e.target.files); e.target.value = ""; };
+status();
+setInterval(status, 4000);
+</script>
+</body>
+</html>

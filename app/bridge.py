@@ -412,6 +412,153 @@ class Api:
 
         threading.Timer(1.5, _quit).start()
 
+    # ------------------------------------------------------------ φωτογραφίες από το κινητό (QR)
+
+    def _phone_image(self, data_url: str, name: str, join: bool) -> dict:
+        res = self.add_image(data_url)
+        if res.get("ok"):
+            self.emit("phone_image", {"image_id": res["image_id"], "data_url": data_url,
+                                      "name": name or "Κινητό", "join": bool(join)})
+        return res
+
+    def phone_start(self) -> dict:
+        """Ανοίγει τη σύνδεση για το κινητό και επιστρέφει διεύθυνση + QR."""
+        from .phone import PhoneServer, qr_svg
+
+        try:
+            if getattr(self, "_phone", None) is None:
+                self._phone = PhoneServer(self._phone_image)
+            self._phone.start()
+            urls = self._phone.urls()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        if not urls:
+            self._phone.stop()
+            return {"ok": False, "error": "Ο υπολογιστής δεν φαίνεται συνδεδεμένος σε τοπικό δίκτυο (Wi-Fi ή καλώδιο). "
+                                          "Συνδέστε τον στο ίδιο δίκτυο με το κινητό και ξαναδοκιμάστε."}
+        return {"ok": True, "url": urls[0], "urls": urls, "qr": qr_svg(urls[0]), "count": self._phone.count}
+
+    def phone_qr(self, url: str) -> dict:
+        from .phone import qr_svg
+
+        return {"ok": True, "url": url, "qr": qr_svg(url)}
+
+    def phone_stop(self) -> dict:
+        ph = getattr(self, "_phone", None)
+        if ph is not None:
+            ph.stop()
+        return {"ok": True}
+
+    def phone_set_target(self, label: str) -> dict:
+        ph = getattr(self, "_phone", None)
+        if ph is not None:
+            ph.target = str(label or "")[:200]
+        return {"ok": True}
+
+    # ------------------------------------------------------------ Corpus (συλλογή ασκήσεων σε υπάρχον Word)
+
+    def corpus_choose_file(self) -> dict:
+        path = self._file_dialog(open_=True, types=("Έγγραφα Word (*.docx)",))
+        if not path:
+            return {"ok": False, "cancelled": True}
+        return self.corpus_open(path)
+
+    def corpus_open(self, path: str) -> dict:
+        """Ανοίγει το αρχείο συλλογής και επιστρέφει τα κεφάλαια/ενότητές του."""
+        from .corpus_doc import CorpusError, outline_of
+
+        p = Path(path or "")
+        if not p.exists():
+            return {"ok": False, "error": f"Δεν βρέθηκε το αρχείο «{p.name or path}»."}
+        if p.suffix.lower() != ".docx":
+            return {"ok": False, "error": "Επιλέξτε έγγραφο Word .docx (τα παλιά .doc ανοίγουν στο Word και αποθηκεύονται ως .docx)."}
+        try:
+            outline = outline_of(p)
+        except CorpusError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Το αρχείο δεν διαβάστηκε: {exc}"}
+        if self._settings.corpus_path != str(p):
+            self._settings.corpus_path = str(p)
+            self._settings.save()
+        return {"ok": True, "path": str(p), "name": p.name, "outline": outline}
+
+    def corpus_transcribe(self, jobs: list[dict]) -> dict:
+        """jobs: [{"job_id", "image_ids": [...]}] — κάθε εικόνα (ή σελίδες) μπορεί να έχει πολλές ασκήσεις.
+        Τα αποτελέσματα έρχονται ως γεγονότα «corpus_transcribed» με λίστα ασκήσεων."""
+        valid = []
+        for j in jobs:
+            pages = [self._images[i].read_bytes() for i in j.get("image_ids", []) if i in self._images]
+            if pages:
+                valid.append((j["job_id"], pages))
+        if not valid:
+            return {"ok": False, "error": "Δεν υπάρχουν εικόνες για μεταγραφή."}
+        threading.Thread(target=self._corpus_worker, args=(valid,), daemon=True).start()
+        return {"ok": True, "count": len(valid)}
+
+    def _corpus_worker(self, jobs: list[tuple[str, list[bytes]]]) -> None:
+        from .providers import get_provider
+        from .transcribe import transcribe_many
+
+        try:
+            provider = get_provider(self._settings)
+        except Exception as exc:  # noqa: BLE001
+            for job_id, _ in jobs:
+                self.emit("corpus_transcribed", {"job_id": job_id, "error": str(exc)})
+            return
+
+        def done(job_id, result, error):
+            if result is not None:
+                for k, ex in enumerate(result):
+                    if ex.get("figure"):
+                        ex["figure_render"] = self._render(f"{job_id}_{k}", ex["figure"].get("spec_json", ""))
+            self.emit("corpus_transcribed", {"job_id": job_id, "result": result, "error": error})
+
+        try:
+            asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done, corpus=True))
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            for job_id, _ in jobs:
+                self.emit("corpus_transcribed", {"job_id": job_id, "error": f"Απρόσμενο σφάλμα: {exc}"})
+
+    def corpus_insert(self, path: str, key: dict, exercises: list[dict]) -> dict:
+        """Εισαγωγή των ασκήσεων στο τέλος της ενότητας `key` του αρχείου `path`.
+        Πριν από την αλλαγή κρατιέται αντίγραφο ασφαλείας στον φάκελο «Αντίγραφα ασφαλείας»."""
+        from .corpus_doc import CorpusError, insert_into, outline_of
+        from .figures import FigureError, render_to_files
+
+        s = self._settings
+        warnings: list[str] = []
+        for i, ex in enumerate(exercises or []):
+            fr = ex.get("figure_render")
+            if fr and fr.get("mode") == "redraw" and fr.get("spec_json"):
+                try:
+                    ex["figure_render"] = render_to_files(fr["spec_json"], self._session_dir / f"corpus_{i}_{uuid.uuid4().hex[:4]}",
+                                                          font=s.math_font, size=s.math_size)
+                except FigureError as exc:
+                    warnings.append(f"Σχήμα άσκησης {i + 1}: {exc}")
+                    ex["figure_render"] = None
+        workdir = self._session_dir / f"corpus_{uuid.uuid4().hex[:6]}"
+        workdir.mkdir(parents=True, exist_ok=True)
+        try:
+            info = insert_into(path, key, exercises, workdir, math_font=s.math_font or "Cambria Math",
+                               make_backup=bool(s.corpus_backup))
+            outline = outline_of(path)
+        except CorpusError as exc:
+            return {"ok": False, "error": str(exc)}
+        except PermissionError:
+            return {"ok": False, "error": "Το αρχείο είναι ανοιχτό στο Word ή δεν επιτρέπεται η εγγραφή. Κλείστε το και ξαναδοκιμάστε."}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Απρόσμενο σφάλμα: {exc}"}
+        try:
+            (workdir / "exercises.json").write_text(json.dumps(exercises, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+        info["warnings"] = warnings + info.get("warnings", [])
+        return {"ok": True, **info, "outline": outline}
+
     def list_fonts(self, refresh: bool = False) -> dict:
         """Εγκατεστημένες γραμματοσειρές (κειμένου με ένδειξη ελληνικών, μαθηματικών με πίνακα MATH)."""
         from .fonts import scan

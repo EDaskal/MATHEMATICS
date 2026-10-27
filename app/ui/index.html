@@ -13,6 +13,10 @@
     <span class="logo" aria-hidden="true">∑</span>
     <span>Γεννήτρια Διαγωνισμάτων</span>
   </div>
+  <nav class="modes" id="modes" aria-label="Λειτουργία">
+    <button data-mode="exam" class="active" title="Διαγώνισμα σε νέο αρχείο Word">Διαγώνισμα</button>
+    <button data-mode="corpus" title="Συλλογή ασκήσεων: προσθήκη ασκήσεων σε δικό σας υπάρχον αρχείο Word">Corpus</button>
+  </nav>
   <nav class="steps" id="steps">
     <button data-tab="setup" class="active"><span class="n">1</span> Διαγώνισμα</button>
     <button data-tab="review"><span class="n">2</span> Έλεγχος</button>
@@ -73,6 +77,10 @@
       </div>
     </div>
 
+    <div class="phone-bar">
+      <button class="btn" id="e-phone" type="button">📱 Φωτογραφίες από το κινητό (QR)</button>
+      <span class="muted small">Οι φωτογραφίες του κινητού μπαίνουν στο θέμα με το μπλε πλαίσιο (πατήστε ένα θέμα για να το επιλέξετε).</span>
+    </div>
     <div class="themes" id="themes"></div>
 
     <div class="actionbar">
@@ -100,6 +108,60 @@
   <!-- ============================================================ 3. Word -->
   <section id="tab-done" class="tab">
     <div class="card done-card" id="done"></div>
+  </section>
+
+  <!-- ============================================================ Corpus -->
+  <section id="tab-corpus" class="tab">
+    <div class="card">
+      <h2>1. Το αρχείο Word της συλλογής</h2>
+      <div class="row">
+        <button class="btn primary" id="c-choose">Επιλογή αρχείου Word…</button>
+        <button class="btn ghost" id="c-reload" title="Νέα ανάγνωση του αρχείου, π.χ. αν το αλλάξατε στο Word">↻ Ανανέωση</button>
+        <button class="btn ghost" id="c-openword" title="Άνοιγμα του αρχείου στο Word">Άνοιγμα στο Word</button>
+        <span class="path" id="c-path"></span>
+      </div>
+      <p class="muted small">Οι ασκήσεις μπαίνουν στο <b>τέλος της ενότητας</b> που θα διαλέξετε, με τη δική σας αρίθμηση και μορφοποίηση.
+        Πριν από κάθε αλλαγή κρατιέται αντίγραφο του αρχείου στον φάκελο «Αντίγραφα ασφαλείας», δίπλα στο αρχείο.
+        <b>Κλείστε το αρχείο στο Word πριν από την εισαγωγή.</b></p>
+      <div class="outline" id="c-outline"></div>
+    </div>
+
+    <div class="card" id="c-images-card">
+      <h2 id="c-images-title">2. Εικόνες ασκήσεων</h2>
+      <div class="phone-bar">
+        <button class="btn" id="c-phone" type="button">📱 Από το κινητό (QR)</button>
+        <span class="muted small">Σκανάρετε ένα QR με το κινητό και οι φωτογραφίες έρχονται εδώ αμέσως. Ή σύρετε αρχεία παρακάτω.</span>
+      </div>
+      <div id="c-drop"></div>
+      <div class="row small" id="c-sortbar">
+        <span class="muted">Σειρά:</span>
+        <button class="btn small ghost" id="c-sort-name" title="1.6.2 πριν από 1.6.10, όπως τα ονόματα των αρχείων">Κατά όνομα αρχείου</button>
+        <button class="btn small ghost" id="c-sort-time" title="Κατά ώρα λήψης/αποθήκευσης της εικόνας">Κατά ώρα λήψης</button>
+        <div class="spacer"></div>
+        <button class="btn small ghost danger" id="c-clear">Αφαίρεση όλων</button>
+      </div>
+      <div class="cthumbs" id="c-thumbs"></div>
+      <p class="muted small">Μία εικόνα μπορεί να έχει πολλές ασκήσεις (π.χ. σελίδα βιβλίου): χωρίζονται αυτόματα.
+        Αν μια άσκηση συνεχίζει στην επόμενη φωτογραφία, πατήστε «⤒ Συνέχεια» στη δεύτερη.</p>
+      <div class="actionbar inline">
+        <div class="total" id="c-img-total"></div>
+        <div class="spacer"></div>
+        <button class="btn primary big" id="c-transcribe">Μεταγραφή →</button>
+      </div>
+    </div>
+
+    <div class="card" id="c-review-card" hidden>
+      <h2 id="c-review-title">3. Έλεγχος</h2>
+      <div class="intro-note">Αριστερά η εικόνα, δεξιά η μεταγραφή. Οι εξισώσεις γράφονται μέσα σε <code>$…$</code>.
+        Οι αριθμοί (π.χ. 6.1, a., b.) είναι αυτοί που θα δώσει η αρίθμηση του αρχείου σας.</div>
+      <div id="c-review"></div>
+      <div class="actionbar inline">
+        <div class="total" id="c-ex-total"></div>
+        <div class="spacer"></div>
+        <button class="btn primary big" id="c-insert">Εισαγωγή στο Word</button>
+      </div>
+    </div>
+    <div class="card done-card" id="c-done" hidden></div>
   </section>
 </main>
 
@@ -239,6 +301,39 @@
       <span class="muted small" id="s-version"></span>
       <div class="spacer"></div>
       <button class="btn primary" id="s-save">Αποθήκευση & κλείσιμο</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ Κινητό (QR) -->
+<div class="modal" id="phone" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2>📱 Φωτογραφίες από το κινητό</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <div class="phone-grid">
+      <div class="qr-box" id="phone-qr"></div>
+      <div>
+        <ol class="phone-steps">
+          <li>Το κινητό να είναι στο <b>ίδιο Wi-Fi</b> με τον υπολογιστή.</li>
+          <li>Ανοίξτε την <b>κάμερα</b> του κινητού και στρέψτε τη στο QR. Πατήστε τον σύνδεσμο που εμφανίζεται.</li>
+          <li>Στη σελίδα που ανοίγει πατήστε <b>📷 Φωτογράφιση</b> (ή <b>🖼 Από τις φωτογραφίες</b> για πολλές μαζί).</li>
+          <li>Κάθε φωτογραφία εμφανίζεται εδώ αμέσως. Μπορείτε να κλείσετε αυτό το παράθυρο· η σύνδεση μένει ανοιχτή.</li>
+        </ol>
+        <div class="kv"><span>Προορισμός</span><b id="phone-target"></b></div>
+        <div class="kv"><span>Λήφθηκαν</span><b id="phone-count">0</b></div>
+        <div class="small muted">Διεύθυνση (αν δεν σκανάρεται το QR, πληκτρολογήστε τη στον browser του κινητού):</div>
+        <div class="path" id="phone-url"></div>
+        <select id="phone-urls" hidden></select>
+      </div>
+    </div>
+    <p class="muted small">Την πρώτη φορά τα Windows μπορεί να ρωτήσουν αν επιτρέπεται η πρόσβαση της εφαρμογής στο δίκτυο:
+      τσεκάρετε <b>Ιδιωτικά δίκτυα</b> και πατήστε <b>Να επιτρέπεται</b>. Αν το κινητό δεν συνδέεται, δείτε τον Οδηγό → «Συχνά προβλήματα».</p>
+    <div class="modal-foot">
+      <button class="btn ghost danger" id="phone-stop">Διακοπή σύνδεσης</button>
+      <div class="spacer"></div>
+      <button class="btn primary" data-close>Κλείσιμο (η σύνδεση μένει ανοιχτή)</button>
     </div>
   </div>
 </div>

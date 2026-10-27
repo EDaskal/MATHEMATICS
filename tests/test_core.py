@@ -270,3 +270,169 @@ def test_font_scan_detects_math_and_greek(tmp_path, monkeypatch):
     assert any(f["greek"] for f in r["text"])
     assert r["math"], "αναμενόταν τουλάχιστον μία γραμματοσειρά μαθηματικών"
     assert scan(dirs=dirs) == r  # από την cache
+
+
+# ------------------------------------------------------------------ Corpus: εισαγωγή σε υπάρχον Word
+
+CORPUS_EX = {
+    "source_label": "", "stem": "Δίνονται τα σημεία $\\mathrm{Α}(1,0)$ και $\\mathrm{Β}(-2,3)$. Να βρείτε:",
+    "items": [
+        {"label": "i", "text": "την εξίσωση της ευθείας $\\mathrm{ΑΒ}$", "choices": None, "items": []},
+        {"label": "ii", "text": "τον συντελεστή διεύθυνσης\n$$\\lambda=\\frac{y_2-y_1}{x_2-x_1}$$", "choices": None, "items": []},
+        {"label": "iii", "text": "1. αν η ευθεία περνά από το $\\mathrm{Ο}$ (όπως στο [[i]])", "choices": None, "items": []},
+    ],
+    "closing": "", "figure": None, "uncertain": [],
+}
+
+
+def _corpus_doc(tmp_path):
+    from app.corpus_doc import sample_document
+
+    return sample_document(tmp_path / "corpus.docx", tmp_path)
+
+
+def test_corpus_outline(tmp_path):
+    from app.corpus_doc import outline_of
+
+    hs = outline_of(_corpus_doc(tmp_path))
+    assert [h["title"] for h in hs] == ["ΚΕΦΑΛΑΙΟ 1: ΕΥΘΕΙΑ", "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "ΓΕΝΙΚΗ ΜΟΡΦΗ", "ΚΕΦΑΛΑΙΟ 2: ΚΥΚΛΟΣ"]
+    assert [h["depth"] for h in hs] == [0, 1, 1, 0]
+    assert all(h["exercises"] == 0 for h in hs)
+
+
+def test_corpus_insert_numbering_continues(tmp_path):
+    from app.corpus_doc import CorpusDoc, insert_into, outline_of
+
+    doc = _corpus_doc(tmp_path)
+    key = {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}
+    info = insert_into(doc, key, [CORPUS_EX, CORPUS_EX], tmp_path, make_backup=True)
+    assert (info["first_label"], info["last_label"]) == ("1.", "2.")
+    assert Path(info["backup"]).exists()
+    info = insert_into(doc, key, [CORPUS_EX], tmp_path, make_backup=False)
+    assert info["last_label"] == "3."
+    hs = {h["title"]: h for h in outline_of(doc)}
+    assert hs["ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ"]["exercises"] == 3
+    assert hs["ΓΕΝΙΚΗ ΜΟΡΦΗ"]["exercises"] == 0  # οι ασκήσεις δεν έγιναν τίτλοι, η επόμενη ενότητα έμεινε ίδια
+    with zipfile.ZipFile(doc) as z:
+        xml = z.read("word/document.xml").decode()
+    # 3 ασκήσεις × (2 εξισώσεις εκφώνησης + 1 + 1 ερωτημάτων + 1 σε δική της γραμμή + 1)
+    assert xml.count("<m:oMath>") + xml.count("<m:oMathPara>") >= 3 * 6
+    assert "[[" not in xml and "(a)" in xml  # παραπομπή [[i]] → (a)
+    assert "1. αν η ευθεία" in xml  # το «1.» στην αρχή κειμένου δεν έγινε λίστα
+    d = CorpusDoc(doc)
+    texts = [d.text(p) for p in d.body if etree_local(p) == "p"]
+    assert texts.index("ΓΕΝΙΚΗ ΜΟΡΦΗ") > max(i for i, t in enumerate(texts) if t.startswith("Δίνονται τα σημεία"))
+
+
+def etree_local(el):
+    from lxml import etree
+
+    return etree.QName(el).localname
+
+
+def test_corpus_unknown_section(tmp_path):
+    from app.corpus_doc import CorpusError, insert_into
+
+    with pytest.raises(CorpusError):
+        insert_into(_corpus_doc(tmp_path), {"title": "ΔΕΝ ΥΠΑΡΧΕΙ", "nth": 0}, [CORPUS_EX], tmp_path)
+
+
+def test_corpus_natural_order():
+    from app.corpus_doc import natural_key
+
+    names = ["1.6.10.png", "1.6.2.png", "1.6.1.1.png", "1.6.1.png", "1.6.1.10.png", "1.6.1.2.png"]
+    assert sorted(names, key=natural_key) == ["1.6.1.png", "1.6.1.1.png", "1.6.1.2.png", "1.6.1.10.png", "1.6.2.png", "1.6.10.png"]
+
+
+def test_corpus_schema_has_no_open_objects():
+    from app.transcribe import CORPUS_SCHEMA
+
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "object":
+                assert n.get("additionalProperties") is False
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+
+    walk(CORPUS_SCHEMA)
+    from app.transcribe import corpus_text
+
+    assert "{pages}" not in corpus_text(1)
+    assert "ΔΙΑΔΟΧΙΚΕΣ" in corpus_text(2) and "ΔΙΑΔΟΧΙΚΕΣ" not in corpus_text(1)
+
+
+# ------------------------------------------------------------------ κινητό (QR)
+
+def test_phone_server_roundtrip():
+    import base64
+    import io
+    import urllib.request
+
+    from PIL import Image
+
+    from app.phone import PhoneServer, qr_svg
+
+    got = []
+    srv = PhoneServer(lambda data, name, join: (got.append((name, join, data[:22])) or {"ok": True}))
+    port = srv.start(port=0)
+    try:
+        base = f"http://127.0.0.1:{port}/m/{srv.token}"
+        page = urllib.request.urlopen(base).read().decode("utf-8")
+        assert "Φωτογράφιση" in page
+        srv.target = "Corpus · 6. ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ"
+        st = json.loads(urllib.request.urlopen(base + "/status").read())
+        assert st["target"] == srv.target and st["count"] == 0
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 30), "white").save(buf, format="JPEG")
+        body = json.dumps({"name": "a.jpg", "join": True,
+                           "data": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}).encode()
+        req = urllib.request.Request(base + "/upload", data=body, method="POST", headers={"Content-Type": "application/json"})
+        res = json.loads(urllib.request.urlopen(req).read())
+        assert res["ok"] and res["count"] == 1
+        assert got == [("a.jpg", True, "data:image/jpeg;base64")]
+        with pytest.raises(urllib.error.HTTPError) as e:  # λάθος κλειδί → 404
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/m/wrongtoken/status")
+        assert e.value.code == 404
+    finally:
+        srv.stop()
+    assert qr_svg("http://192.168.1.10:8766/m/x").startswith("<svg")
+
+
+# ------------------------------------------------------------------ 1.4.1: στήλες, σύμβολα, αρίθμηση
+
+def test_column_separator_normalized():
+    from app.transcribe import normalize
+
+    d = normalize({"stem": "x", "items": [{"label": "1", "text": "$A(1,2)$,⇥$B(3,4)$", "choices": None},
+                                          {"label": "2", "text": "$A(1,2)$\t$\\theta$", "choices": None}]})
+    assert d["items"][0]["text"] == "$A(1,2)$, ⇥ $B(3,4)$"
+    assert d["items"][1]["text"] == "$A(1,2)$ ⇥ $\\theta$"  # το \theta δεν πειράζεται
+
+
+def test_corpus_columns_become_aligned_tabs(tmp_path):
+    from app.corpus_doc import insert_into
+
+    ex = {"stem": "Να βρεθεί ο συντελεστής διεύθυνσης όταν:", "closing": "", "figure": None, "items": [
+        {"label": "1", "text": "$\\mathrm{Α}(3,4)$, ⇥ $\\mathrm{Β}(6,7)$", "choices": None, "items": []},
+        {"label": "2", "text": "$\\mathrm{Α}(3\\kappa+1,2\\kappa+1)$, ⇥ $\\mathrm{Β}(-1,-3)$", "choices": None, "items": []}]}
+    doc = _corpus_doc(tmp_path)
+    insert_into(doc, {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, [ex], tmp_path, make_backup=False)
+    with zipfile.ZipFile(doc) as z:
+        xml = z.read("word/document.xml").decode()
+    stops = re.findall(r'<w:tab w:val="left" w:pos="(\d+)"/>', xml)
+    assert len(stops) == 2 and stops[0] == stops[1]  # ίδιος στηλοθέτης και στα δύο ερωτήματα
+    assert xml.count("<w:tab/>") == 2 and "§TAB§" not in xml and "⇥" not in xml
+    assert "−" not in xml and "<m:t>-" in xml  # μείον όπως το γράφει το Word
+
+
+def test_exam_columns_and_minus(tmp_path):
+    ex = load("three_levels.json")
+    ex["items"][0]["text"] = "$\\mathrm{Α}(-1,2)$, ⇥ $\\mathrm{Β}(3,-4)$"
+    out = tmp_path / "e.docx"
+    build_docx({"title": "Τ", "themes": [{"exercises": [ex], "points": [50, 50]}]}, out)
+    with zipfile.ZipFile(out) as z:
+        xml = z.read("word/document.xml").decode()
+    assert "  " in xml and "⇥" not in xml and "−" not in xml

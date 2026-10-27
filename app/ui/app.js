@@ -54,6 +54,8 @@ async function pollEvents() {
 
 window.__onPyEvent = (payload) => {
   if (payload.event === "transcribed") onTranscribed(payload.data);
+  if (payload.event === "corpus_transcribed") onCorpusTranscribed(payload.data);
+  if (payload.event === "phone_image") onPhoneImage(payload.data);
   if (payload.event === "update_progress") onUpdateProgress(payload.data);
 };
 
@@ -166,12 +168,13 @@ function escapeHtml(s) {
 
 function mdToHtml(text, refmap = {}) {
   const maths = [];
-  let t = String(text || "");
+  let t = String(text || "").replace(/[ ]*(?:\t|⇥)[ ]*/g, " @@TAB@@ ");
   t = t.replace(/\$\$([\s\S]+?)\$\$/g, (_, g) => { maths.push(renderMath(g, true)); return `@@M${maths.length - 1}@@`; });
   t = t.replace(/\$([^$\n]+?)\$/g, (_, g) => { maths.push(renderMath(g, false)); return `@@M${maths.length - 1}@@`; });
   t = t.replace(/\[\[([^\]]+)\]\]/g, (_, g) => refmap[g.trim()] || `(${g.trim()})`);
   let html = marked.parse(t, { breaks: false, gfm: true });
   html = html.replace(/@@M(\d+)@@/g, (_, i) => maths[+i]);
+  html = html.replace(/ ?@@TAB@@ ?/g, '<span class="coltab" title="στήλη (στηλοθέτης στο Word)"></span>');
   return html;
 }
 
@@ -277,6 +280,88 @@ function setTarget(t, e) {
   if (!isTarget(t, e)) { S.target = { t, e }; renderThemes(); }
 }
 
+/* ================================================================== ΚΙΝΗΤΟ (QR) */
+S.phone = { active: false, count: 0, url: "" };
+
+function phoneTargetLabel() {
+  if (S.mode === "corpus") {
+    const sec = corpusSection();
+    return sec ? `Corpus · ${sec.display}` : "Corpus · (επιλέξτε ενότητα στην εφαρμογή)";
+  }
+  const L = LETTERS[S.target.t] || "";
+  return `Διαγώνισμα · ΘΕΜΑ ${L}`;
+}
+
+function phoneSync() {
+  const lab = phoneTargetLabel();
+  if ($("#phone-target")) $("#phone-target").textContent = lab;
+  for (const id of ["#c-phone", "#e-phone"]) {
+    const b = $(id);
+    if (!b) continue;
+    b.classList.toggle("on", S.phone.active);
+    b.textContent = S.phone.active ? `📱 Κινητό: σύνδεση ανοιχτή · ${S.phone.count} φωτογραφίες` : (id === "#c-phone" ? "📱 Από το κινητό (QR)" : "📱 Φωτογραφίες από το κινητό (QR)");
+  }
+  if (S.phone.active) api.phone_set_target(lab).catch(() => {});
+}
+
+function showQr(res) {
+  $("#phone-qr").innerHTML = res.qr;
+  $("#phone-url").textContent = res.url;
+  S.phone.url = res.url;
+}
+
+async function phoneOpen() {
+  if (!S.phone.active) {
+    let res;
+    try { res = await api.phone_start(); } catch (e) { res = { ok: false, error: String(e.message || e) }; }
+    if (!res.ok) { toast(res.error, true, 9000); return; }
+    S.phone.active = true;
+    S.phone.count = res.count || 0;
+    showQr(res);
+    const sel = $("#phone-urls");
+    sel.innerHTML = "";
+    sel.hidden = (res.urls || []).length < 2;
+    for (const u of res.urls || []) sel.append(el("option", { value: u, text: `Άλλη διεύθυνση δικτύου: ${u}` }));
+    sel.onchange = async () => showQr(await api.phone_qr(sel.value));
+  }
+  $("#phone-count").textContent = S.phone.count;
+  phoneSync();
+  openModal("#phone");
+}
+
+async function phoneStop() {
+  await api.phone_stop();
+  S.phone.active = false;
+  $("#phone").hidden = true;
+  phoneSync();
+  toast("Η σύνδεση με το κινητό έκλεισε. Το παλιό QR δεν ισχύει πια.");
+}
+
+async function onPhoneImage({ image_id, data_url, name, join }) {
+  S.phone.count++;
+  $("#phone-count").textContent = S.phone.count;
+  if (S.mode === "corpus") {
+    const C = S.corpus;
+    const dup = C.images.find((im) => im.dataUrl === data_url);
+    if (dup) { toast(`Η φωτογραφία «${name}» είναι ίδια με «${dup.name}» και παραλείφθηκε.`); phoneSync(); return; }
+    const last = C.images[C.images.length - 1];
+    if (join && last) corpusMarkChanged(last);
+    C.images.push({ id: newId(), imageId: image_id, dataUrl: data_url, name, time: Date.now(),
+      join: !!(join && last), status: "new", error: null });
+    renderCorpusImages();
+    toast(join && last ? `📱 «${name}»: συνέχεια της προηγούμενης φωτογραφίας` : `📱 Νέα φωτογραφία: «${name}»`);
+  } else {
+    const t = S.target.t;
+    const th = S.exam.themes[t];
+    if (!th) return;
+    let e = -1;
+    if (join && th.exercises.length) e = S.target.e >= 0 && th.exercises[S.target.e] ? S.target.e : th.exercises.length - 1;
+    await addPageId(t, e, image_id, data_url);
+    toast(e >= 0 ? `📱 Συνέχεια άσκησης στο ΘΕΜΑ ${LETTERS[t]}` : `📱 Νέα άσκηση στο ΘΕΜΑ ${LETTERS[t]}`);
+  }
+  phoneSync();
+}
+
 /** Ζώνη εικόνων: σύρσιμο, κλικ για επιλογή αρχείου, και στόχος για Ctrl+V. */
 function dropZone(tIdx, eIdx, label, hint) {
   const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true,
@@ -307,6 +392,7 @@ function pageThumb(tIdx, eIdx, pIdx, page, nPages) {
 }
 
 function renderThemes() {
+  if (S.phone && S.phone.active) phoneSync();
   const box = $("#themes");
   box.innerHTML = "";
   S.exam.themes.forEach((t, i) => {
@@ -370,11 +456,19 @@ function fileToDataUrl(file) {
 
 /** Προσθήκη σελίδας: eIdx = -1 → νέα άσκηση, αλλιώς συνέχεια της άσκησης eIdx. */
 async function addPage(tIdx, eIdx, dataUrl) {
-  const t = S.exam.themes[tIdx];
   try {
     const res = await api.add_image(dataUrl);
     if (!res.ok) { toast(res.error, true); return; }
-    const page = { imageId: res.image_id, dataUrl };
+    await addPageId(tIdx, eIdx, res.image_id, dataUrl);
+  } catch (e) { toast(String(e.message || e), true); }
+}
+
+/** Όπως το addPage, για εικόνα που έχει ήδη καταχωριστεί (π.χ. ήρθε από το κινητό). */
+async function addPageId(tIdx, eIdx, imageId, dataUrl) {
+  const t = S.exam.themes[tIdx];
+  if (!t) return;
+  try {
+    const page = { imageId, dataUrl };
     if (eIdx < 0 || !t.exercises[eIdx]) {
       t.exercises.push({ id: newId(), pages: [page], status: "new", data: null, error: null, fig: null });
       S.target = { t: tIdx, e: t.exercises.length - 1 };
@@ -435,7 +529,7 @@ async function removeEx(i, k) {
 }
 
 document.addEventListener("paste", async (e) => {
-  if (!$("#tab-setup").classList.contains("active")) return;
+  if (S.mode === "corpus" || !$("#tab-setup").classList.contains("active")) return;
   const items = Array.from(e.clipboardData?.items || []).filter((it) => it.type.startsWith("image/"));
   if (!items.length) return;
   e.preventDefault();
@@ -1128,6 +1222,456 @@ function onUpdateProgress(d) {
   label.textContent = d.total ? `Λήψη ${pct}%` : `Λήψη ${(d.done / 1048576).toFixed(0)} MB`;
 }
 
+
+/* ================================================================== CORPUS: ασκήσεις σε υπάρχον Word */
+S.mode = "exam";
+S.examTab = "setup";
+S.corpus = { path: "", name: "", outline: [], sel: -1, images: [], exs: [], jobs: {}, manual: false, opened: false };
+
+function setMode(mode) {
+  S.mode = mode;
+  document.body.classList.toggle("mode-corpus", mode === "corpus");
+  for (const b of $$("#modes button")) b.classList.toggle("active", b.dataset.mode === mode);
+  if (mode === "corpus") {
+    const cur = $(".tab.active");
+    if (cur && cur.id !== "tab-corpus") S.examTab = cur.id.replace("tab-", "");
+    for (const s of $$(".tab")) s.classList.toggle("active", s.id === "tab-corpus");
+    if (!S.corpus.opened && S.app.settings.corpus_path) corpusOpen(S.app.settings.corpus_path, true);
+    S.corpus.opened = true;
+    renderCorpus();
+  } else {
+    switchTab(S.examTab || "setup");
+  }
+  phoneSync();
+  window.scrollTo(0, 0);
+}
+
+function fmtNum(n, fmt) {
+  const letters = (k) => { const a = "abcdefghijklmnopqrstuvwxyz"; return a[(k - 1) % 26].repeat(Math.floor((k - 1) / 26) + 1); };
+  const roman = (k) => { let o = ""; for (const [v, r] of [[1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"], [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]]) while (k >= v) { o += r; k -= v; } return o; };
+  switch (fmt) {
+    case "lowerLetter": return letters(n);
+    case "upperLetter": return letters(n).toUpperCase();
+    case "lowerRoman": return roman(n);
+    case "upperRoman": return roman(n).toUpperCase();
+    default: return String(n);
+  }
+}
+
+function corpusSection() { return S.corpus.outline[S.corpus.sel] || null; }
+
+function corpusExLabel(i) {
+  const sec = corpusSection();
+  if (!sec) return `${i + 1}.`;
+  const n = (sec.start || 1) + sec.exercises + i;
+  return (sec.pattern || "%1.").replace("%1", fmtNum(n, sec.formats?.[0]));
+}
+
+function corpusItemLabel(path) {
+  const sec = corpusSection();
+  const fmts = sec?.formats || ["decimal", "lowerLetter", "lowerRoman", "decimal"];
+  const d = path.length; // 1 = ερώτημα, 2 = υποερώτημα
+  return fmtNum(path[path.length - 1] + 1, fmts[Math.min(d, 3)]) + ".";
+}
+
+async function corpusOpen(path, quiet = false) {
+  const res = path ? await api.corpus_open(path) : await api.corpus_choose_file();
+  if (!res.ok) {
+    if (!res.cancelled && !quiet) toast(res.error, true, 7000);
+    renderCorpus();
+    return;
+  }
+  const prevKey = corpusSection()?.key;
+  Object.assign(S.corpus, { path: res.path, name: res.name, outline: res.outline });
+  S.corpus.sel = prevKey ? res.outline.findIndex((h) => h.key.title === prevKey.title && h.key.nth === prevKey.nth) : -1;
+  S.app.settings.corpus_path = res.path;
+  renderCorpus();
+}
+
+function renderCorpus() {
+  const C = S.corpus;
+  $("#c-path").textContent = C.path ? C.path : "Δεν έχει επιλεγεί αρχείο.";
+  $("#c-reload").disabled = !C.path;
+  $("#c-openword").disabled = !C.path;
+  const ol = $("#c-outline");
+  ol.innerHTML = "";
+  if (C.path && !C.outline.length) {
+    ol.append(el("div", { class: "ol-row muted", text: "Δεν βρέθηκαν κεφάλαια/ενότητες. Χρειάζονται τίτλοι με στυλ «Επικεφαλίδα» ή επίπεδο διάρθρωσης." }));
+  }
+  C.outline.forEach((h, i) => {
+    const cnt = h.exercises ? `${h.exercises} ασκήσεις · τελευταία ${h.last_label}` : (h.depth > 0 ? "καμία άσκηση ακόμα" : "");
+    ol.append(el("div", { class: `ol-row d${Math.min(h.depth, 2)}` + (i === C.sel ? " sel" : ""), title: "Επιλογή ενότητας για τις νέες ασκήσεις",
+      onclick: () => { C.sel = i; renderCorpus(); } },
+      el("span", { text: h.display }), el("span", { class: "cnt", text: cnt })));
+  });
+  if (S.phone.active) phoneSync();
+  const sec = corpusSection();
+  $("#c-images-title").textContent = sec ? `2. Εικόνες ασκήσεων για «${sec.display}»` : "2. Εικόνες ασκήσεων";
+  renderCorpusImages();
+  renderCorpusReview();
+}
+
+/* ---------- εικόνες */
+function corpusDrop() {
+  const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true,
+    onchange: async (ev) => { await corpusAddFiles(ev.target.files); ev.target.value = ""; } });
+  const drop = el("div", { class: "drop active", tabindex: 0, onclick: () => input.click() },
+    el("div", { class: "drop-title", text: "Σύρετε εδώ όσες εικόνες θέλετε (φωτογραφίες ή screenshots)" }),
+    el("div", { class: "small", text: "ή πατήστε για επιλογή αρχείων · Ctrl+V για επικόλληση screenshot" }));
+  drop.addEventListener("dragover", (ev) => { ev.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", async (ev) => { ev.preventDefault(); drop.classList.remove("over"); await corpusAddFiles(ev.dataTransfer.files); });
+  return el("div", {}, drop, input);
+}
+
+// ταξινόμηση όπως τα ονόματα αρχείων (χωρίς την κατάληξη): 1.6.1 → 1.6.1.1 → 1.6.2 → 1.6.10
+const stemOf = (n) => String(n || "").replace(/\.[A-Za-z0-9]{2,5}$/, "");
+const natCmp = (a, b) => stemOf(a).localeCompare(stemOf(b), undefined, { numeric: true, sensitivity: "base" });
+
+async function corpusAddFiles(files, fromPaste = false) {
+  const list = Array.from(files || []).filter((f) => f.type.startsWith("image/"));
+  if (!list.length) { toast("Επιλέξτε αρχεία εικόνας (PNG, JPG).", true); return; }
+  if (!fromPaste) list.sort((a, b) => natCmp(a.name, b.name));
+  const skipped = [];
+  let added = 0;
+  for (const f of list) {
+    const dataUrl = await fileToDataUrl(f);
+    const dup = S.corpus.images.find((im) => im.dataUrl === dataUrl);
+    if (dup) { skipped.push(`«${f.name}» (ίδια με «${dup.name}»)`); continue; }
+    try {
+      const res = await api.add_image(dataUrl);
+      if (!res.ok) { toast(`${f.name}: ${res.error}`, true); continue; }
+      S.corpus.images.push({ id: newId(), imageId: res.image_id, dataUrl, name: fromPaste ? `Επικόλληση ${S.corpus.images.length + 1}` : f.name,
+        time: f.lastModified || Date.now(), join: false, status: "new", error: null });
+      added++;
+    } catch (e) { toast(String(e.message || e), true); }
+  }
+  renderCorpusImages();
+  if (skipped.length) toast(`Παραλείφθηκαν διπλές εικόνες: ${skipped.join(", ")}`, false, 7000);
+  else if (added) toast(`Προστέθηκαν ${added} εικόνες.`);
+}
+
+function corpusGroups() {
+  // ομάδες εικόνων: μια εικόνα με «Συνέχεια» ενώνεται με την προηγούμενη (σελίδες της ίδιας άσκησης)
+  const groups = [];
+  S.corpus.images.forEach((im, i) => {
+    if (im.join && i > 0 && groups.length) groups[groups.length - 1].push(im);
+    else groups.push([im]);
+  });
+  return groups;
+}
+
+function corpusMarkChanged(im) {
+  // αλλαγή σε ομάδα που είχε μεταγραφεί: οι ασκήσεις της αφαιρούνται και ξαναδιαβάζονται
+  const job = Object.values(S.corpus.jobs).find((j) => j.imageIds.includes(im.id));
+  if (job) dropJob(job.id);
+}
+
+function dropJob(jobId) {
+  const job = S.corpus.jobs[jobId];
+  if (!job) return;
+  S.corpus.exs = S.corpus.exs.filter((x) => x.jobId !== jobId);
+  for (const im of S.corpus.images) if (job.imageIds.includes(im.id)) { im.status = "new"; im.error = null; }
+  delete S.corpus.jobs[jobId];
+}
+
+function renderCorpusImages() {
+  const C = S.corpus;
+  $("#c-drop").replaceChildren(corpusDrop());
+  const box = $("#c-thumbs");
+  box.innerHTML = "";
+  const badge = { new: ["", "νέα"], pending: ["run", "διαβάζεται…"], done: ["ok", "έτοιμη"], error: ["err", "σφάλμα"] };
+  C.images.forEach((im, i) => {
+    const b = badge[im.status] || badge.new;
+    const job = Object.values(C.jobs).find((j) => j.imageIds[0] === im.id);
+    const nEx = job ? C.exs.filter((x) => x.jobId === job.id).length : 0;
+    box.append(el("div", { class: "cthumb" + (im.join ? " joined" : "") },
+      el("img", { src: im.dataUrl, alt: "", onclick: () => lightbox(im.dataUrl) }),
+      el("div", { class: "nm", title: im.name, text: `${i + 1}. ${im.name}` }),
+      el("div", { class: "tools" },
+        el("span", { class: `badge ${b[0]}`, title: im.error || "", text: im.status === "done" && job ? `${nEx} ασκ.` : b[1] }),
+        el("div", { class: "spacer" }),
+        i > 0 ? el("button", { class: im.join ? "on" : "", title: "Η εικόνα είναι συνέχεια (επόμενη σελίδα) της προηγούμενης", text: "⤒ Συνέχεια",
+          onclick: () => { corpusMarkChanged(im); corpusMarkChanged(C.images[i - 1]); im.join = !im.join; renderCorpus(); } }) : null,
+        el("button", { title: "Πιο μπροστά", text: "◀", onclick: () => corpusMoveImage(i, -1) }),
+        el("button", { title: "Πιο πίσω", text: "▶", onclick: () => corpusMoveImage(i, 1) }),
+        el("button", { title: "Αφαίρεση", text: "✕", onclick: () => corpusRemoveImage(i) }))));
+  });
+  const n = C.images.length;
+  const todo = C.images.filter((im) => im.status === "new" || im.status === "error").length;
+  $("#c-img-total").textContent = n ? `${n} εικόνες` + (todo && todo < n ? ` · ${todo} για μεταγραφή` : "") : "";
+  $("#c-sortbar").hidden = n < 2;
+  $("#c-transcribe").disabled = !todo;
+}
+
+function corpusMoveImage(i, d) {
+  const imgs = S.corpus.images;
+  const j = i + d;
+  if (j < 0 || j >= imgs.length) return;
+  for (const im of [imgs[i], imgs[j]]) if (im.join || imgs[imgs.indexOf(im) + 1]?.join) corpusMarkChanged(im);
+  [imgs[i], imgs[j]] = [imgs[j], imgs[i]];
+  if (imgs[0]) imgs[0].join = false;
+  corpusResort();
+  renderCorpus();
+}
+
+function corpusRemoveImage(i) {
+  const im = S.corpus.images[i];
+  const job = Object.values(S.corpus.jobs).find((j) => j.imageIds.includes(im.id));
+  if (job && S.corpus.exs.some((x) => x.jobId === job.id) && !confirm("Να αφαιρεθεί η εικόνα και οι ασκήσεις που διαβάστηκαν από αυτήν;")) return;
+  if (job) dropJob(job.id);
+  S.corpus.images.splice(i, 1);
+  if (S.corpus.images[i]) S.corpus.images[i].join = S.corpus.images[i].join && i > 0;
+  if (S.corpus.images[0]) S.corpus.images[0].join = false;
+  renderCorpus();
+}
+
+function corpusSort(by) {
+  const imgs = S.corpus.images;
+  if (imgs.some((im) => im.join) && !confirm("Η ταξινόμηση θα αφαιρέσει τις ενώσεις «Συνέχεια». Συνέχεια;")) return;
+  for (const im of imgs) { if (im.join) corpusMarkChanged(im); im.join = false; }
+  imgs.sort(by === "time" ? (a, b) => a.time - b.time || natCmp(a.name, b.name) : (a, b) => natCmp(a.name, b.name));
+  corpusResort();
+  renderCorpus();
+}
+
+/** Οι ασκήσεις ακολουθούν τη σειρά των εικόνων (εκτός αν έχουν μετακινηθεί με το χέρι). */
+function corpusResort() {
+  if (S.corpus.manual) return;
+  const pos = {};
+  S.corpus.images.forEach((im, i) => { pos[im.id] = i; });
+  const jobPos = (x) => pos[S.corpus.jobs[x.jobId]?.imageIds[0]] ?? 1e9;
+  S.corpus.exs.sort((a, b) => jobPos(a) - jobPos(b) || a.k - b.k);
+}
+
+/* ---------- μεταγραφή */
+async function corpusTranscribe(groups) {
+  const C = S.corpus;
+  if (!groups) groups = corpusGroups().filter((g) => g.some((im) => im.status === "new" || im.status === "error"));
+  if (!groups.length) { toast("Δεν υπάρχουν νέες εικόνες για μεταγραφή."); return; }
+  const jobs = [];
+  for (const g of groups) {
+    const old = Object.values(C.jobs).find((j) => j.imageIds[0] === g[0].id);
+    if (old) dropJob(old.id);
+    const id = newId();
+    C.jobs[id] = { id, imageIds: g.map((im) => im.id) };
+    g.forEach((im) => { im.status = "pending"; im.error = null; });
+    jobs.push({ job_id: id, image_ids: g.map((im) => im.imageId) });
+  }
+  renderCorpus();
+  try {
+    const res = await api.corpus_transcribe(jobs);
+    if (!res.ok) throw new Error(res.error);
+  } catch (e) {
+    for (const g of groups) g.forEach((im) => { im.status = "error"; im.error = String(e.message || e); });
+    toast(String(e.message || e), true, 7000);
+  }
+  renderCorpus();
+}
+
+function onCorpusTranscribed({ job_id, result, error }) {
+  const C = S.corpus;
+  const job = C.jobs[job_id];
+  if (!job) return;
+  const imgs = C.images.filter((im) => job.imageIds.includes(im.id));
+  if (error || !result) {
+    imgs.forEach((im) => { im.status = "error"; im.error = error || "Άγνωστο σφάλμα."; });
+    toast(`Σφάλμα στην εικόνα «${imgs[0]?.name || ""}»: ${error}`, true, 7000);
+  } else {
+    imgs.forEach((im) => { im.status = "done"; });
+    result.forEach((data, k) => {
+      const fr = data.figure_render || null;
+      delete data.figure_render;
+      C.exs.push({ id: newId(), jobId: job_id, k, data, fig: data.figure ? { mode: "redraw", render: fr, crop: null } : null });
+    });
+    if (!result.length) toast(`Στην εικόνα «${imgs[0]?.name || ""}» δεν βρέθηκε άσκηση.`, true, 6000);
+    corpusResort();
+  }
+  renderCorpusImages();
+  renderCorpusReview();
+}
+
+/* ---------- έλεγχος */
+function renderCorpusReview() {
+  const C = S.corpus;
+  const card = $("#c-review-card");
+  const pending = C.images.filter((im) => im.status === "pending").length;
+  card.hidden = !C.exs.length && !pending;
+  const box = $("#c-review");
+  box.innerHTML = "";
+  C.exs.forEach((ex, i) => box.append(renderCorpusExercise(ex, i)));
+  if (pending) box.append(el("div", { class: "pending" }, el("div", { class: "spinner" }),
+    `Ο Claude διαβάζει ${pending} ${pending === 1 ? "εικόνα" : "εικόνες"}… (συνήθως 10–60 δευτερόλεπτα η καθεμία, παράλληλα)`));
+  const sec = corpusSection();
+  $("#c-review-title").textContent = `3. Έλεγχος — ${C.exs.length} ${C.exs.length === 1 ? "άσκηση" : "ασκήσεις"}`;
+  $("#c-ex-total").textContent = C.exs.length && sec ? `${corpusExLabel(0)} – ${corpusExLabel(C.exs.length - 1)} στο «${sec.display}»` : "";
+  $("#c-insert").textContent = sec ? `Εισαγωγή στο «${sec.display}»` : "Εισαγωγή στο Word";
+}
+
+function corpusFigureBox(ex) {
+  const st = ex.fig;
+  const fig = ex.data.figure;
+  const job = S.corpus.jobs[ex.jobId];
+  const imgs = S.corpus.images.filter((im) => job?.imageIds.includes(im.id));
+  const page = imgs[Math.min(Math.max(0, fig.crop_page || 0), imgs.length - 1)];
+  const box = el("div", { class: "figure-box" });
+  const current = st.mode === "original" ? st.crop : st.mode === "redraw" ? st.render : null;
+  const rerender = () => { const c = document.getElementById(`cx-${ex.id}`); if (c) c.replaceWith(renderCorpusExercise(ex, S.corpus.exs.indexOf(ex))); };
+  const radio = (value, text) => el("label", {},
+    el("input", { type: "radio", name: `cfig-${ex.id}`, value, checked: st.mode === value, onchange: async () => {
+      st.mode = value;
+      if (value === "original" && !st.crop && page) st.crop = await api.crop_figure(ex.id, page.imageId, fig.crop);
+      rerender();
+    } }), text);
+  box.append(el("div", { class: "row" }, el("span", { class: "field-label", text: "Σχήμα" }),
+    fig.confidence === "low" ? el("span", { class: "badge err", text: "αβέβαιη ανάγνωση — ελέγξτε το" }) : null));
+  box.append(el("div", { class: "radio-row" }, radio("redraw", "Επανασχεδιασμένο"), radio("original", "Πρωτότυπη εικόνα (περικοπή)"), radio("none", "Χωρίς σχήμα")));
+  if (current && current.png_data) box.append(el("img", { class: "fig-img", src: current.png_data, onclick: () => lightbox(current.png_data) }));
+  if (current && current.error) box.append(el("div", { class: "fig-warn", text: current.error }));
+  box.append(el("div", { class: "small muted", text: fig.description }));
+  return box;
+}
+
+function renderCorpusExercise(ex, i) {
+  const C = S.corpus;
+  const job = C.jobs[ex.jobId];
+  const imgs = C.images.filter((im) => job?.imageIds.includes(im.id));
+  const orig = el("div", { class: "orig" },
+    ...imgs.map((im) => el("div", { class: "orig-page" },
+      el("div", { class: "page-lab", text: im.name }),
+      el("img", { src: im.dataUrl, alt: im.name, onclick: () => lightbox(im.dataUrl) }))),
+    el("div", { class: "src small muted", text: ex.data.source_label ? `Άσκηση βιβλίου: ${ex.data.source_label}` : "" }));
+  const editor = el("div", { class: "editor" });
+  const card = el("div", { class: "ex", id: `cx-${ex.id}` }, orig, editor);
+  const d = ex.data;
+  const rerender = () => { const c = document.getElementById(`cx-${ex.id}`); if (c) c.replaceWith(renderCorpusExercise(ex, C.exs.indexOf(ex))); };
+  const move = (dd) => {
+    const j = i + dd;
+    if (j < 0 || j >= C.exs.length) return;
+    [C.exs[i], C.exs[j]] = [C.exs[j], C.exs[i]];
+    C.manual = true;
+    renderCorpusReview();
+  };
+  editor.append(el("div", { class: "cx-head" },
+    el("span", { class: "cx-num", text: corpusExLabel(i) }),
+    el("div", { class: "spacer" }),
+    el("button", { class: "icon-mini", title: "Άσκηση πιο πάνω", text: "▲", onclick: () => move(-1) }),
+    el("button", { class: "icon-mini", title: "Άσκηση πιο κάτω", text: "▼", onclick: () => move(1) }),
+    el("button", { class: "icon-mini danger", title: "Να μη μπει αυτή η άσκηση", text: "✕", onclick: () => {
+      if (!confirm("Να αφαιρεθεί αυτή η άσκηση από την εισαγωγή;")) return;
+      C.exs.splice(C.exs.indexOf(ex), 1); renderCorpusReview(); renderCorpusImages();
+    } })));
+  if (d.uncertain && d.uncertain.length) {
+    editor.append(el("div", { class: "notes" }, el("b", { text: "Χρειάζεται έλεγχος:" }),
+      el("ul", {}, ...d.uncertain.map((u) => el("li", { text: u })))));
+  }
+  editor.append(el("div", { class: "field-label", text: "Εκφώνηση" }), textPair(d.stem, (v) => { d.stem = v; }, {}, 3));
+  if (d.figure && ex.fig) editor.append(corpusFigureBox(ex));
+  editor.append(el("div", { class: "field-label", text: "Ερωτήματα" }));
+  editor.append(renderItems(d.items, 1, corpusItemLabel, [], {}, rerender));
+  editor.append(el("button", { class: "btn small ghost", text: "+ ερώτημα", onclick: () => { d.items.push({ label: "", text: "", choices: null, items: [] }); rerender(); } }));
+  if (d.closing) editor.append(el("div", { class: "field-label", text: "Κείμενο στο τέλος" }), textPair(d.closing, (v) => { d.closing = v; }, {}));
+  editor.append(el("div", { class: "row" }, el("div", { class: "spacer" }),
+    el("button", { class: "btn small ghost", text: "↻ Ξαναδιάβασε την εικόνα", onclick: () => {
+      if (!confirm("Η εικόνα θα διαβαστεί από την αρχή και οι αλλαγές σε όλες τις ασκήσεις της θα χαθούν. Συνέχεια;")) return;
+      corpusTranscribe([imgs]);
+    } })));
+  return card;
+}
+
+/* ---------- εισαγωγή */
+function corpusPayload() {
+  return S.corpus.exs.map((ex) => {
+    let fr = null;
+    if (ex.data.figure && ex.fig) {
+      if (ex.fig.mode === "original") {
+        const c = ex.fig.crop;
+        if (c && !c.error) fr = { mode: "original", png: c.png, svg: null, width_cm: c.width_cm };
+      } else if (ex.fig.mode === "redraw") {
+        const r = ex.fig.render || {};
+        fr = { mode: "redraw", spec_json: ex.data.figure.spec_json, png: r.png, svg: r.svg, width_cm: r.width_cm };
+      }
+    }
+    return { stem: ex.data.stem, items: ex.data.items, closing: ex.data.closing, figure_render: fr };
+  });
+}
+
+async function corpusInsert() {
+  const C = S.corpus;
+  const sec = corpusSection();
+  if (!C.path) { toast("Επιλέξτε πρώτα το αρχείο Word (βήμα 1).", true); return; }
+  if (!sec) { toast("Επιλέξτε στη λίστα του βήματος 1 την ενότητα όπου θα μπουν οι ασκήσεις.", true); window.scrollTo(0, 0); return; }
+  if (!C.exs.length) { toast("Δεν υπάρχουν ασκήσεις για εισαγωγή.", true); return; }
+  const pending = C.images.filter((im) => im.status === "pending").length;
+  if (pending) { toast("Περιμένετε να ολοκληρωθεί η μεταγραφή όλων των εικόνων.", true); return; }
+  const failed = C.images.filter((im) => im.status === "error" || im.status === "new").length;
+  if (failed && !confirm(`${failed} εικόνα(ες) δεν έχουν μεταγραφεί και θα παραλειφθούν. Συνέχεια;`)) return;
+  if (!confirm(`Θα μπουν ${C.exs.length} ασκήσεις (${corpusExLabel(0)} – ${corpusExLabel(C.exs.length - 1)}) στο τέλος της ενότητας «${sec.display}».\n\nΒεβαιωθείτε ότι το αρχείο είναι κλειστό στο Word. Συνέχεια;`)) return;
+  const btn = $("#c-insert");
+  btn.disabled = true;
+  btn.textContent = "Εισαγωγή…";
+  let res;
+  try {
+    res = await api.corpus_insert(C.path, sec.key, corpusPayload());
+  } catch (e) {
+    res = { ok: false, error: String(e.message || e) };
+  } finally {
+    btn.disabled = false;
+  }
+  const done = $("#c-done");
+  done.hidden = false;
+  done.innerHTML = "";
+  if (!res.ok) {
+    done.append(el("h2", { text: "Η εισαγωγή δεν έγινε" }), el("div", { class: "error-box", text: res.error }),
+      el("p", { class: "muted small", text: "Το αρχείο σας δεν άλλαξε. Οι ασκήσεις παραμένουν εδώ· διορθώστε το πρόβλημα και πατήστε ξανά «Εισαγωγή»." }));
+    renderCorpusReview();
+    done.scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  done.append(...[
+    el("div", { class: "row" }, el("span", { class: "okmark", text: "✓" }),
+      el("h2", { style: "margin:0", text: `Προστέθηκαν ${res.inserted} ασκήσεις (${res.first_label} – ${res.last_label}) στο «${sec.display}»` })),
+    el("div", { class: "path", text: res.path }),
+    el("div", { class: "row" },
+      el("button", { class: "btn primary", text: "Άνοιγμα στο Word", onclick: () => api.open_file(res.path) }),
+      el("button", { class: "btn", text: "Άνοιγμα φακέλου", onclick: () => api.open_folder(res.path) })),
+    res.backup ? el("p", { class: "muted small", text: `Αντίγραφο του αρχείου πριν από την αλλαγή: ${res.backup}` }) : null,
+    res.removed_placeholders ? el("p", { class: "muted small", text: `Αφαιρέθηκαν ${res.removed_placeholders} κενές αριθμημένες γραμμές που υπήρχαν στην ενότητα.` }) : null,
+    res.warnings && res.warnings.length ? el("div", { class: "notes" }, el("b", { text: "Σημειώσεις:" }), el("ul", {}, ...res.warnings.map((w) => el("li", { text: w })))) : null,
+    el("p", { class: "muted small", text: "Για την επόμενη ενότητα: επιλέξτε τη στη λίστα του βήματος 1 και προσθέστε νέες εικόνες." }),
+  ].filter(Boolean));
+  // νέα παρτίδα: οι ασκήσεις μπήκαν στο Word
+  Object.assign(C, { images: [], exs: [], jobs: {}, manual: false, outline: res.outline || C.outline });
+  renderCorpus();
+  done.scrollIntoView({ behavior: "smooth" });
+}
+
+function bindCorpus() {
+  for (const b of $$("#modes button")) b.onclick = () => setMode(b.dataset.mode);
+  $("#c-phone").onclick = phoneOpen;
+  $("#e-phone").onclick = phoneOpen;
+  $("#phone-stop").onclick = phoneStop;
+  $("#c-choose").onclick = () => corpusOpen("");
+  $("#c-reload").onclick = () => corpusOpen(S.corpus.path);
+  $("#c-openword").onclick = () => S.corpus.path && api.open_file(S.corpus.path);
+  $("#c-sort-name").onclick = () => corpusSort("name");
+  $("#c-sort-time").onclick = () => corpusSort("time");
+  $("#c-clear").onclick = () => {
+    if (!S.corpus.images.length || !confirm("Να αφαιρεθούν όλες οι εικόνες και οι μεταγραφές τους;")) return;
+    Object.assign(S.corpus, { images: [], exs: [], jobs: {}, manual: false });
+    renderCorpus();
+  };
+  $("#c-transcribe").onclick = () => corpusTranscribe();
+  $("#c-insert").onclick = corpusInsert;
+  document.addEventListener("paste", async (e) => {
+    if (S.mode !== "corpus") return;
+    const items = Array.from(e.clipboardData?.items || []).filter((it) => it.type.startsWith("image/"));
+    if (!items.length) return;
+    e.preventDefault();
+    await corpusAddFiles(items.map((it) => it.getAsFile()).filter(Boolean), true);
+  });
+}
+
 /* ================================================================== εκκίνηση */
 function refreshLists() {
   fillList("#f-class", "classes");
@@ -1166,6 +1710,7 @@ async function main() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModals(); });
   for (const b of $$("#steps button")) b.onclick = () => { if (b.dataset.tab === "done") renderDone(); switchTab(b.dataset.tab); };
   bindSettings();
+  bindCorpus();
   updateTemplateHint();
   await setThemeCount(+$("#f-nthemes").value);
   if (s.check_updates) setTimeout(() => checkUpdates(false), 1500);

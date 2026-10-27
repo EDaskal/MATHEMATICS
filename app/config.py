@@ -55,6 +55,9 @@ class Settings:
     update_repo: str = "EDaskal/MATHEMATICS"  # από πού ελέγχονται οι νέες εκδόσεις (GitHub Releases)
     max_parallel: int = 3
     timeout_sec: int = 300
+    # Corpus: το τελευταίο αρχείο Word συλλογής ασκήσεων και αν κρατιούνται αντίγραφα ασφαλείας
+    corpus_path: str = ""
+    corpus_backup: bool = True
 
     @classmethod
     def load(cls) -> "Settings":

@@ -89,6 +89,7 @@ def _fix_refs(text: str, refmap: dict[str, str]) -> str:
 def _clean(text: str) -> str:
     """Καθαρισμός κειμένου για pandoc: χωρίς κενές γραμμές στην αρχή/τέλος, $$ σε δική τους γραμμή."""
     t = (text or "").strip()
+    t = re.sub(r"[ ]*[\t⇥][ ]*", "\u2003\u2003", t)  # στήλες (⇥/TAB) → φαρδύ κενό
     t = re.sub(r"\s*\$\$(.+?)\$\$\s*", lambda m: "\n$$" + m.group(1).strip() + "$$\n", t, flags=re.S)
     return t.strip()
 
@@ -516,7 +517,18 @@ def _apply_math_runs(doc_xml: bytes, math_font: str, size_pt: float) -> bytes:
         if rpr is None:
             rpr = etree.SubElement(ctrl, W + "rPr")
         _set_run_fonts(rpr, math_font, hp)
+    normalize_math_text(root)
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+# Σύμβολα όπως τα αποθηκεύει το ίδιο το Word όταν πληκτρολογείτε εξίσωση (το pandoc γράφει − και ′).
+MATH_CHAR_MAP = str.maketrans({"\u2212": "-", "\u2032": "'"})
+
+
+def normalize_math_text(root) -> None:
+    for t in root.iter(M + "t"):
+        if t.text:
+            t.text = t.text.translate(MATH_CHAR_MAP)
 
 
 def _sort_children(el, order: list[str]) -> None:
