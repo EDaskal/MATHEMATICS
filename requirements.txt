@@ -11,6 +11,7 @@ numpy>=1.26
 pillow>=10
 lxml>=5
 segno>=1.6  # QR code για τη σύνδεση με το κινητό (καθαρή Python)
+olefile>=0.46  # εξισώσεις MathType μέσα στο Word (έλεγχος ίδιων ασκήσεων)
 # Εργαλεία (δοκιμές, πρότυπο)
 python-docx>=1.1
 pytest>=8

@@ -58,6 +58,8 @@ class Settings:
     # Corpus: το τελευταίο αρχείο Word συλλογής ασκήσεων και αν κρατιούνται αντίγραφα ασφαλείας
     corpus_path: str = ""
     corpus_backup: bool = True
+    # Έλεγχος αν οι νέες ασκήσεις υπάρχουν ήδη στο έγγραφο: off | low (μόνο ίδιες) | normal | high
+    dup_check: str = "normal"
 
     @classmethod
     def load(cls) -> "Settings":

@@ -124,6 +124,58 @@
         Πριν από κάθε αλλαγή κρατιέται αντίγραφο του αρχείου στον φάκελο «Αντίγραφα ασφαλείας», δίπλα στο αρχείο.
         <b>Κλείστε το αρχείο στο Word πριν από την εισαγωγή.</b></p>
       <div class="outline" id="c-outline"></div>
+      <div class="row" id="c-audit-bar">
+        <button class="btn" id="c-audit-open" type="button">🔍 Έλεγχος του αρχείου για ίδιες ασκήσεις</button>
+        <span class="muted small">Βρίσκει ασκήσεις που υπάρχουν δύο φορές στη συλλογή ή και σε ένα δεύτερο αρχείο Word.</span>
+      </div>
+    </div>
+
+    <div class="card" id="c-audit-card" hidden>
+      <div class="row">
+        <h2 style="margin:0">🔍 Έλεγχος του αρχείου για ίδιες ασκήσεις</h2>
+        <div class="spacer"></div>
+        <button class="icon-btn" id="c-audit-close" title="Κλείσιμο">✕</button>
+      </div>
+      <p class="muted small">Ελέγχονται <b>όλες</b> οι ασκήσεις της συλλογής: ποιες υπάρχουν δύο φορές (ίδιες, με άλλα νούμερα,
+        με ίδιο ερώτημα ή παρόμοιες). Αν διαλέξετε και δεύτερο αρχείο, ελέγχεται και ποιες ασκήσεις του υπάρχουν ήδη στη συλλογή.
+        Τα αρχεία <b>δεν αλλάζουν</b>· αν θέλετε να σβήσετε μια άσκηση, το κάνετε στο Word.</p>
+      <div class="kv"><span>Συλλογή</span><b id="c-audit-a"></b></div>
+      <div class="kv"><span>Και με το αρχείο</span>
+        <span class="row" style="margin:0">
+          <button class="btn small" id="c-audit-other" type="button">Επιλογή αρχείου… (προαιρετικά)</button>
+          <span class="path" id="c-audit-b" hidden></span>
+          <button class="btn small ghost" id="c-audit-b-clear" type="button" title="Χωρίς δεύτερο αρχείο" hidden>✕</button>
+        </span></div>
+      <div class="row">
+        <label class="small">Αυστηρότητα:
+          <select id="c-audit-sens">
+            <option value="low">Μόνο ίδιες</option>
+            <option value="normal">Κανονικός</option>
+            <option value="high">Αυστηρός (και πιο μακρινές ομοιότητες)</option>
+          </select></label>
+        <div class="spacer"></div>
+        <button class="btn" id="c-audit-move" type="button" title="Μετακίνηση οποιασδήποτε άσκησης πριν/μετά από άλλη">↕ Μετακίνηση άσκησης…</button>
+        <button class="btn primary" id="c-audit-run" type="button">Έλεγχος</button>
+      </div>
+      <div id="c-audit-moveres"></div>
+      <div class="dup-bar" id="c-audit-status-bar" hidden><span id="c-audit-status" class="dup-status"></span></div>
+      <div class="row small audit-filters" id="c-audit-filters" hidden>
+        <span class="muted">Εμφάνιση:</span>
+        <select id="c-audit-f-level">
+          <option value="">Όλες οι ενδείξεις</option>
+          <option value="same">🔴 Ίδιες</option>
+          <option value="numbers">🟠 Ίδιες, άλλα νούμερα</option>
+          <option value="part">🟠 Ίδιο ερώτημα</option>
+          <option value="similar">🟡 Παρόμοιες</option>
+        </select>
+        <select id="c-audit-f-scope">
+          <option value="">Μέσα στη συλλογή και με το άλλο αρχείο</option>
+          <option value="internal">Μόνο μέσα στη συλλογή</option>
+          <option value="cross">Μόνο με το άλλο αρχείο</option>
+        </select>
+        <select id="c-audit-f-sec"></select>
+      </div>
+      <div id="c-audit-list" class="audit-list"></div>
     </div>
 
     <div class="card" id="c-images-card">
@@ -154,7 +206,20 @@
       <h2 id="c-review-title">3. Έλεγχος</h2>
       <div class="intro-note">Αριστερά η εικόνα, δεξιά η μεταγραφή. Οι εξισώσεις γράφονται μέσα σε <code>$…$</code>.
         Οι αριθμοί (π.χ. 6.1, a., b.) είναι αυτοί που θα δώσει η αρίθμηση του αρχείου σας.</div>
+      <div class="dup-bar" id="c-dup-bar">
+        <span id="c-dup-status" class="dup-status"></span>
+        <div class="spacer"></div>
+        <label class="small">Έλεγχος για ίδιες ασκήσεις:
+          <select id="c-dup-sens">
+            <option value="off">Ανενεργός</option>
+            <option value="low">Μόνο ίδιες</option>
+            <option value="normal">Κανονικός</option>
+            <option value="high">Αυστηρός (και πιο μακρινές ομοιότητες)</option>
+          </select></label>
+        <button class="btn small ghost" id="c-dup-recheck" title="Ξανά έλεγχος (π.χ. μετά από διορθώσεις στο κείμενο)">↻ Έλεγχος</button>
+      </div>
       <div id="c-review"></div>
+      <div id="c-plan" class="plan-note" hidden></div>
       <div class="actionbar inline">
         <div class="total" id="c-ex-total"></div>
         <div class="spacer"></div>
@@ -306,6 +371,51 @@
 </div>
 
 <!-- ============================================================ Κινητό (QR) -->
+<div class="modal" id="dup" hidden>
+  <div class="modal-body wide">
+    <div class="modal-head">
+      <h2 id="dup-title">Σύγκριση ασκήσεων</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <div class="dup-grid">
+      <div class="dup-col"><div class="dup-col-head" id="dup-left-head"></div><div class="dup-ex" id="dup-left"></div></div>
+      <div class="dup-col"><div class="dup-col-head" id="dup-right-head"></div><div class="dup-ex" id="dup-right"></div></div>
+    </div>
+    <div id="dup-diffs"></div>
+    <div class="modal-foot">
+      <button class="btn ghost danger" id="dup-skip">Να μη μπει η νέα άσκηση</button>
+      <div class="spacer"></div>
+      <button class="btn primary" data-close>Κλείσιμο (μένει στην εισαγωγή)</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="place" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2 id="place-title">Θέση της άσκησης</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <div id="place-what"></div>
+    <div class="place-modes">
+      <label id="place-end-wrap"><input type="radio" name="place-mode" value="end"><span id="place-end-text">Στο τέλος της ενότητας</span></label>
+      <label><input type="radio" name="place-mode" value="after"><span><b>Μετά</b> από την άσκηση που θα διαλέξετε</span></label>
+      <label><input type="radio" name="place-mode" value="before"><span><b>Πριν</b> από την άσκηση που θα διαλέξετε</span></label>
+    </div>
+    <div id="place-suggest"></div>
+    <div id="place-pick">
+      <input type="search" id="place-filter" placeholder="Αναζήτηση: αριθμός (π.χ. 4.32) ή λέξεις της εκφώνησης">
+      <select id="place-anchor" size="9"></select>
+    </div>
+    <div id="place-preview" class="place-preview"></div>
+    <div class="modal-foot">
+      <div class="spacer"></div>
+      <button class="btn ghost" data-close>Ακύρωση</button>
+      <button class="btn primary" id="place-ok">Εφαρμογή</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="phone" hidden>
   <div class="modal-body">
     <div class="modal-head">

@@ -492,3 +492,246 @@ def test_phone_virtualbox_last_without_adapter_names(monkeypatch):
     monkeypatch.setattr(_socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("192.168.56.1", 0)),
                                                                    (0, 0, 0, "", ("20.20.1.45", 0))])
     assert phone.lan_ips() == ["20.20.1.45", "192.168.56.1"]
+
+
+# --------------------------------------------------------------------------- 1.5.0: ίδιες ασκήσεις
+
+def test_mathtype_mtef_to_latex():
+    from app.mathtype import mtef_to_latex
+
+    # χειροποίητη MTEF 5: κεφαλίδα, γραμμή με [διάνυσμα(ΓΔ)] = κλάσμα(1/2), ρίζα(x^2)
+    def ch(tf, code):
+        return bytes([2, 0, 128 + tf]) + code.to_bytes(2, "little")
+
+    def line(*objs):
+        return bytes([1, 0]) + b"".join(objs) + b"\x00"
+
+    def tmpl(sel, var, *slots):
+        return bytes([3, 0, sel, var, 0]) + b"".join(slots) + b"\x00"
+
+    null_line = bytes([1, 1])
+    eq = (b"\x05\x01\x00\x06\x08DSMT6\x00\x00"
+          + line(tmpl(31, 2, line(ch(5, 0x0393), ch(5, 0x0394))),  # \overrightarrow{ΓΔ}
+                 ch(6, 0x3D),
+                 tmpl(11, 0, line(ch(8, 0x31)), line(ch(8, 0x32))),  # \frac{1}{2}
+                 ch(6, 0x2212),
+                 tmpl(10, 0, line(ch(3, 0x78), tmpl(28, 0, null_line, line(ch(8, 0x32)))), null_line))
+          + b"\x00")
+    tex = mtef_to_latex(eq)
+    assert tex == r"\overrightarrow{\Gamma \Delta}=\frac{1}{2}-\sqrt{x^{2}}"
+    assert mtef_to_latex(b"\x1c\x00" + b"\x00" * 26 + eq) == tex  # με την κεφαλίδα OLE των 28 bytes
+    assert mtef_to_latex(b"garbage") is None
+
+
+def test_omml_to_latex():
+    from lxml import etree
+
+    from app.duplicates import omml_latex
+
+    M = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+    xml = (f'<m:oMath {M}><m:acc><m:accPr><m:chr m:val="⃗"/></m:accPr><m:e><m:r><m:t>ΑΒ</m:t></m:r></m:e></m:acc>'
+           '<m:r><m:t>=</m:t></m:r><m:f><m:num><m:r><m:t>1</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r></m:den></m:f>'
+           '<m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>'
+           '<m:r><m:rPr><m:scr m:val="double-struck"/></m:rPr><m:t>R</m:t></m:r></m:oMath>')
+    tex = omml_latex(etree.fromstring(xml))
+    assert tex.startswith(r"\overrightarrow{ΑΒ}=\frac{1}{2}{x}^{2}")
+    assert r"\mathbb{R}" in tex
+
+
+def test_canon_ignores_typography():
+    from app.duplicates import canon, mask_numbers, pretty
+
+    a = r"Δίνονται τα σημεία $\mathrm{Α}(1,0)$ και $\mathrm{Β}(-2,3)$. Να βρείτε το $\vec{\alpha}\cdot\vec{\beta}$, $x\in\mathbb{R}$"
+    b = r"Δίνονται τα σημεία $Α\left(1, 0\right)$ και $B(−2,3)$ · Να βρείτε το $\overrightarrow{α}⋅\overrightarrow{β}$, $x \in ℝ$"
+    assert canon(a) == canon(b)  # \mathrm, \left, κενά, −/-, λατινικό B, \vec/\overrightarrow, ℝ
+    assert canon(r"$\frac{1}{2}$") == canon("1/2") and canon(r"$\sin x$") == canon(r"$\mathrm{ημ}x$")
+    assert mask_numbers(canon("Α(1,0) και Β(-2,3)")) == mask_numbers(canon("Α(4,7) και Β(-5,9)"))
+    assert pretty(r"$\overrightarrow{\mathrm{ΑΒ}}=(1,\frac{1}{2})$") == "ΑΒ⃗=(1,1/2)"
+
+
+def test_duplicates_in_corpus_document(tmp_path):
+    import copy
+
+    from app.corpus_doc import insert_into
+    from app.duplicates import check, index_of
+
+    doc = _corpus_doc(tmp_path)
+    other = {"source_label": "", "stem": "Να βρείτε την απόσταση του σημείου $\\mathrm{Μ}(3,4)$ από την ευθεία "
+             "$\\varepsilon: 3x+4y-5=0$ και το εμβαδόν του τριγώνου που σχηματίζει η $\\varepsilon$ με τους άξονες.",
+             "items": [], "closing": "", "figure": None, "uncertain": []}
+    insert_into(doc, {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, [CORPUS_EX, other], tmp_path, make_backup=False)
+    idx = index_of(doc)
+    labels = [e["label"] for e in idx["exercises"]]
+    assert labels == ["1.", "2."]
+    assert idx["exercises"][0]["parts"][1]["label"] == "a."  # τα ερωτήματα με την αρίθμηση του Word
+
+    same = copy.deepcopy(CORPUS_EX)
+    same["stem"] = same["stem"].replace("$\\mathrm{Α}(1,0)$", "$Α(1, 0)$")  # μόνο τυπογραφική διαφορά
+    numbers = copy.deepcopy(other)
+    numbers["stem"] = numbers["stem"].replace("(3,4)", "(6,2)").replace("3x+4y-5", "5x-12y+7")
+    part = {"source_label": "", "stem": "Δίνεται η ευθεία $\\zeta: y=2x-1$. Να βρείτε:", "closing": "", "figure": None,
+            "uncertain": [], "items": [{"label": "a", "text": "τα σημεία τομής της με τους άξονες", "choices": None, "items": []},
+                                       copy.deepcopy(CORPUS_EX["items"][1])]}
+    fresh = {"source_label": "", "stem": "Να λύσετε την εξίσωση $x^2-5x+6=0$ και να ελέγξετε τις λύσεις στο τετράδιο.",
+             "items": [], "closing": "", "figure": None, "uncertain": []}
+    new = [same, numbers, part, fresh, copy.deepcopy(fresh)]
+
+    res = check(new, idx["exercises"], "normal")
+    assert res[0][0]["level"] == "same" and res[0][0]["label"] == "1."
+    assert res[1][0]["level"] == "numbers" and res[1][0]["label"] == "2." and res[1][0]["diffs"]
+    assert res[2][0]["level"] == "part" and res[2][0]["part"] == "1" and res[2][0]["other_part"] == "b."
+    assert res[3] == []
+    assert res[4][0]["kind"] == "batch" and res[4][0]["index"] == 3 and res[4][0]["level"] == "same"
+    # «μόνο ίδιες»: χωρίς «άλλα νούμερα» · ανενεργός: τίποτα
+    low = check(new, idx["exercises"], "low")
+    assert low[0][0]["level"] == "same" and low[1] == []
+    assert check(new, idx["exercises"], "off") == [[]] * len(new)
+
+
+def test_bridge_corpus_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    from app.bridge import Api
+    from app.corpus_doc import insert_into
+
+    doc = _corpus_doc(tmp_path)
+    insert_into(doc, {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, [CORPUS_EX], tmp_path, make_backup=False)
+    api = Api()
+    r = api.corpus_check(str(doc), [CORPUS_EX], "high")
+    assert r["ok"] and r["existing"] == 1 and r["matches"][0][0]["level"] == "same"
+    assert api._settings.dup_check == "high"
+    assert api.corpus_check(str(tmp_path / "missing.docx"), [CORPUS_EX])["ok"] is False
+
+
+def test_audit_whole_document_and_second_file(tmp_path, monkeypatch):
+    import copy
+
+    from app.corpus_doc import insert_into, sample_document
+    from app.duplicates import audit, index_of
+
+    a_dir, b_dir = tmp_path / "a", tmp_path / "b"
+    a_dir.mkdir()
+    b_dir.mkdir()
+    doc_a = sample_document(a_dir / "a.docx", a_dir)
+    doc_b = sample_document(b_dir / "b.docx", b_dir)
+    other = {"source_label": "", "stem": "Να βρείτε την απόσταση του σημείου $\\mathrm{Μ}(3,4)$ από την ευθεία "
+             "$\\varepsilon: 3x+4y-5=0$ και το εμβαδόν του τριγώνου που σχηματίζει η $\\varepsilon$ με τους άξονες.",
+             "items": [], "closing": "", "figure": None, "uncertain": []}
+    numbers = copy.deepcopy(other)
+    numbers["stem"] = numbers["stem"].replace("(3,4)", "(6,2)")
+    fresh = {"source_label": "", "stem": "Να λύσετε την εξίσωση $x^2-5x+6=0$ και να ελέγξετε τις λύσεις στο τετράδιο.",
+             "items": [], "closing": "", "figure": None, "uncertain": []}
+    key = {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}
+    insert_into(doc_a, key, [CORPUS_EX, other, copy.deepcopy(CORPUS_EX), numbers], a_dir, make_backup=False)
+    insert_into(doc_b, key, [fresh, copy.deepcopy(other)], b_dir, make_backup=False)
+    ea, eb = index_of(doc_a)["exercises"], index_of(doc_b)["exercises"]
+
+    r = audit(ea, None, "normal")
+    got = {(p["level"], ea[p["a"]]["label"], ea[p["b"]]["label"]) for p in r["pairs"]}
+    assert ("same", "1.", "3.") in got and ("numbers", "2.", "4.") in got
+    assert all(not p["cross"] and p["a"] < p["b"] for p in r["pairs"])
+
+    r = audit(ea, eb, "low")
+    cross = [p for p in r["pairs"] if p["cross"]]
+    assert [(eb[p["b"]]["label"], ea[p["a"]]["label"], p["level"]) for p in cross] == [("2.", "2.", "same")]
+    assert {p["level"] for p in r["pairs"]} == {"same"}  # «μόνο ίδιες»
+
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    from app.bridge import Api
+
+    res = Api().corpus_audit(str(doc_a), str(doc_b), "normal")
+    assert res["ok"] and res["b"]["name"] == "b.docx" and len(res["a"]["exercises"]) == 4
+    assert Api().corpus_audit(str(doc_a), str(doc_a))["ok"] is False  # ίδιο αρχείο
+
+
+# --------------------------------------------------------------------------- 1.7.0: θέση και μετακίνηση ασκήσεων
+
+def _ex(text):
+    return {"source_label": "", "stem": text, "closing": "", "figure": None, "uncertain": [],
+            "items": [{"label": "a", "text": f"ερώτημα της «{text[:12]}» με $x={len(text)}$", "choices": None, "items": []}]}
+
+
+def _stems(doc):
+    from app.duplicates import index_of
+
+    return [(e["section"], e["label"], e["parts"][0]["md"][:6]) for e in index_of(doc)["exercises"]]
+
+
+def test_move_and_place_exercises(tmp_path):
+    import pytest
+
+    from app.corpus_doc import CorpusError, file_sha, insert_into, move_in, undo_change
+    from app.duplicates import index_of
+
+    doc = _corpus_doc(tmp_path)
+    a_key, b_key = {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, {"title": "ΓΕΝΙΚΗ ΜΟΡΦΗ", "nth": 0}
+    insert_into(doc, a_key, [_ex("ΑΑΑ πρώτη άσκηση της Α"), _ex("ΒΒΒ δεύτερη άσκηση της Α"),
+                             _ex("ΓΓΓ τρίτη άσκηση της Α")], tmp_path, make_backup=False)
+    insert_into(doc, b_key, [_ex("ΔΔΔ πρώτη της Β"), _ex("ΕΕΕ δεύτερη της Β")], tmp_path, make_backup=False)
+    ex = {e["parts"][0]["md"][:3]: e for e in index_of(doc)["exercises"]}
+
+    # μέσα στην ίδια ενότητα: η ΓΓΓ πριν από την ΑΑΑ
+    r = move_in(doc, ex["ΓΓΓ"], ex["ΑΑΑ"], "before")
+    assert (r["moved_from"], r["moved_to"]) == ("3.", "1.")
+    assert [s[2][:3] for s in _stems(doc)][:3] == ["ΓΓΓ", "ΑΑΑ", "ΒΒΒ"]
+    assert any("1.–2. → 2.–3." in t for t in r["renumbered"]) and Path(r["backup"]).exists()
+    # αναίρεση: μόνο αν το αρχείο δεν άλλαξε, και επαναφέρει ακριβώς το αντίγραφο
+    sha_after = file_sha(doc)
+    undo_change(doc, r["backup"], r["sha"])
+    assert file_sha(doc) != sha_after and [s[2][:3] for s in _stems(doc)][:3] == ["ΑΑΑ", "ΒΒΒ", "ΓΓΓ"]
+    with pytest.raises(CorpusError):
+        undo_change(doc, r["backup"], "λάθος")
+
+    # σε άλλη ενότητα: η ΒΒΒ μετά την ΔΔΔ → παίρνει την αρίθμηση της ενότητας Β
+    ex = {e["parts"][0]["md"][:3]: e for e in index_of(doc)["exercises"]}
+    r = move_in(doc, ex["ΒΒΒ"], ex["ΔΔΔ"], "after", make_backup=False)
+    st = _stems(doc)
+    assert [(s[0], s[1], s[2][:3]) for s in st] == [
+        ("ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "1.", "ΑΑΑ"), ("ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "2.", "ΓΓΓ"),
+        ("ΓΕΝΙΚΗ ΜΟΡΦΗ", "1.", "ΔΔΔ"), ("ΓΕΝΙΚΗ ΜΟΡΦΗ", "2.", "ΒΒΒ"), ("ΓΕΝΙΚΗ ΜΟΡΦΗ", "3.", "ΕΕΕ")]
+    assert r["section"] == "ΓΕΝΙΚΗ ΜΟΡΦΗ" and "Αρίθμηση: συνεχόμενη" in r["checks"][-1]
+    idx = index_of(doc)["exercises"]
+    assert idx[3]["parts"][1]["label"] == "a."  # και τα ερωτήματα στην αρίθμηση της νέας ενότητας
+
+    # ήδη στη θέση του → μήνυμα, χωρίς αλλαγή
+    ex = {e["parts"][0]["md"][:3]: e for e in idx}
+    before = file_sha(doc)
+    with pytest.raises(CorpusError, match="ήδη"):
+        move_in(doc, ex["ΒΒΒ"], ex["ΔΔΔ"], "after")
+    assert file_sha(doc) == before
+
+    # νέα άσκηση σε συγκεκριμένη θέση + μία στο τέλος της ενότητας
+    new1, new2 = _ex("ΖΖΖ νέα μετά την ΑΑΑ"), _ex("ΗΗΗ νέα στο τέλος")
+    new1["place"] = {"side": "after", "fp": ex["ΑΑΑ"]["fp"], "label": ex["ΑΑΑ"]["label"]}
+    info = insert_into(doc, a_key, [new1, new2], tmp_path, make_backup=False)
+    assert info["labels"] == ["2.", "4."] and any("2. → 3." in t for t in info["renumbered"])
+    assert [s[2][:3] for s in _stems(doc) if s[0] == "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ"] == ["ΑΑΑ", "ΖΖΖ", "ΓΓΓ", "ΗΗΗ"]
+    # θέση που δεν υπάρχει πια → καθαρό μήνυμα, το αρχείο δεν αλλάζει
+    bad = _ex("ΘΘΘ")
+    bad["place"] = {"side": "after", "fp": "000000000000", "label": "9."}
+    before = file_sha(doc)
+    with pytest.raises(CorpusError, match="δεν βρέθηκε"):
+        insert_into(doc, a_key, [bad], tmp_path, make_backup=False)
+    assert file_sha(doc) == before
+
+
+def test_numbering_issues_and_summary():
+    from app.corpus_doc import numbering_issues
+
+    exs = [{"label": f"4.{n}", "section": "4."} for n in (1, 2, 4)] + [{"label": "5.1", "section": "5."}]
+    assert numbering_issues(exs) == ["4.: μετά την 4.2 ακολουθεί η 4.4"]
+
+
+def test_exercise_without_stem_is_kept(tmp_path):
+    from app.corpus_doc import insert_into, outline_of
+    from app.duplicates import index_of
+
+    doc = _corpus_doc(tmp_path)
+    key = {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}
+    no_stem = dict(_ex("x"), stem="")
+    info = insert_into(doc, key, [_ex("ΑΑΑ πρώτη"), no_stem, _ex("ΓΓΓ τρίτη")], tmp_path, make_backup=False)
+    assert info["labels"] == ["1.", "2.", "3."]
+    # η επόμενη εισαγωγή δεν τη σβήνει ως «κενή θέση»
+    info = insert_into(doc, key, [_ex("ΔΔΔ τέταρτη")], tmp_path, make_backup=False)
+    assert info["removed_placeholders"] == 0 and info["labels"] == ["4."]
+    assert [e["label"] for e in index_of(doc)["exercises"]] == ["1.", "2.", "3.", "4."]
+    assert {h["title"]: h["exercises"] for h in outline_of(doc)}["ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ"] == 4

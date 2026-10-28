@@ -29,6 +29,7 @@ hiddenimports += ["keyring.backends.Windows", "win32ctypes.core", "win32ctypes.p
 hiddenimports += ["matplotlib.backends.backend_svg", "matplotlib.backends.backend_agg"]  # φορτώνονται δυναμικά από το savefig
 hiddenimports += collect_submodules("fontTools.ttLib.tables")  # πίνακες γραμματοσειρών (name, cmap, MATH) — δυναμική φόρτωση
 hiddenimports += collect_submodules("segno")  # QR code για το κινητό
+hiddenimports += ["olefile"]  # εξισώσεις MathType (έλεγχος ίδιων ασκήσεων)
 
 a = Analysis(  # noqa: F821
     [str(ROOT / "app" / "main.py")],

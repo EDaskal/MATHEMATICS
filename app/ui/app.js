@@ -1229,7 +1229,7 @@ function onUpdateProgress(d) {
 /* ================================================================== CORPUS: ασκήσεις σε υπάρχον Word */
 S.mode = "exam";
 S.examTab = "setup";
-S.corpus = { path: "", name: "", outline: [], sel: -1, images: [], exs: [], jobs: {}, manual: false, opened: false };
+S.corpus = { path: "", name: "", outline: [], sel: -1, images: [], exs: [], jobs: {}, manual: false, opened: false, dup: null, docEx: null };
 
 function setMode(mode) {
   S.mode = mode;
@@ -1264,6 +1264,8 @@ function fmtNum(n, fmt) {
 function corpusSection() { return S.corpus.outline[S.corpus.sel] || null; }
 
 function corpusExLabel(i) {
+  const plan = corpusPlan();
+  if (plan && plan.labels[i]) return plan.labels[i];
   const sec = corpusSection();
   if (!sec) return `${i + 1}.`;
   const n = (sec.start || 1) + sec.exercises + i;
@@ -1288,7 +1290,11 @@ async function corpusOpen(path, quiet = false) {
   Object.assign(S.corpus, { path: res.path, name: res.name, outline: res.outline });
   S.corpus.sel = prevKey ? res.outline.findIndex((h) => h.key.title === prevKey.title && h.key.nth === prevKey.nth) : -1;
   S.app.settings.corpus_path = res.path;
+  if (S.audit.path !== res.path) Object.assign(S.audit, { path: res.path, res: null });
   renderCorpus();
+  renderAudit();
+  corpusCheckDuplicates(0);
+  loadDocEx();
 }
 
 function renderCorpus() {
@@ -1489,6 +1495,7 @@ function onCorpusTranscribed({ job_id, result, error }) {
     });
     if (!result.length) toast(`Στην εικόνα «${imgs[0]?.name || ""}» δεν βρέθηκε άσκηση.`, true, 6000);
     corpusResort();
+    corpusCheckDuplicates();
   }
   renderCorpusImages();
   renderCorpusReview();
@@ -1507,8 +1514,13 @@ function renderCorpusReview() {
     `Ο Claude διαβάζει ${pending} ${pending === 1 ? "εικόνα" : "εικόνες"}… (συνήθως 10–60 δευτερόλεπτα η καθεμία, παράλληλα)`));
   const sec = corpusSection();
   $("#c-review-title").textContent = `3. Έλεγχος — ${C.exs.length} ${C.exs.length === 1 ? "άσκηση" : "ασκήσεις"}`;
-  $("#c-ex-total").textContent = C.exs.length && sec ? `${corpusExLabel(0)} – ${corpusExLabel(C.exs.length - 1)} στο «${sec.display}»` : "";
-  $("#c-insert").textContent = sec ? `Εισαγωγή στο «${sec.display}»` : "Εισαγωγή στο Word";
+  const placed = C.exs.filter((x) => x.place).length;
+  $("#c-ex-total").textContent = !C.exs.length ? "" : placed
+    ? `${C.exs.length - placed} στο τέλος ${sec ? `του «${sec.display}»` : "της ενότητας"} · ${placed} σε θέση που ορίσατε (📍)`
+    : (sec ? `${corpusExLabel(0)} – ${corpusExLabel(C.exs.length - 1)} στο «${sec.display}»` : "");
+  $("#c-insert").textContent = placed === C.exs.length && placed ? "Εισαγωγή στο Word" : (sec ? `Εισαγωγή στο «${sec.display}»` : "Εισαγωγή στο Word");
+  renderPlanNote();
+  renderDupStatus();
 }
 
 function corpusFigureBox(ex) {
@@ -1557,13 +1569,33 @@ function renderCorpusExercise(ex, i) {
   };
   editor.append(el("div", { class: "cx-head" },
     el("span", { class: "cx-num", text: corpusExLabel(i) }),
+    el("button", { class: "btn small ghost place-btn" + (ex.place ? " set" : ""), title: "Πού θα μπει η άσκηση στο Word",
+      text: ex.place ? `📍 ${ex.place.side === "after" ? "μετά την" : "πριν από την"} ${ex.place.label}` : "📍 Στο τέλος της ενότητας",
+      onclick: () => openPlaceForNew(ex) }),
     el("div", { class: "spacer" }),
     el("button", { class: "icon-mini", title: "Άσκηση πιο πάνω", text: "▲", onclick: () => move(-1) }),
     el("button", { class: "icon-mini", title: "Άσκηση πιο κάτω", text: "▼", onclick: () => move(1) }),
     el("button", { class: "icon-mini danger", title: "Να μη μπει αυτή η άσκηση", text: "✕", onclick: () => {
       if (!confirm("Να αφαιρεθεί αυτή η άσκηση από την εισαγωγή;")) return;
-      C.exs.splice(C.exs.indexOf(ex), 1); renderCorpusReview(); renderCorpusImages();
+      corpusDropExercise(ex);
     } })));
+  const dups = dupMatches(ex);
+  if (dups.length) {
+    const top = dups[0].level;
+    card.classList.add(`dup-${top}`);
+    editor.querySelector(".cx-num").after(el("span", { class: `dup-badge ${top}`, text: DUP_TEXT[top] }));
+    const box = el("div", { class: `dup-box ${top}` });
+    for (const m of dups) {
+      box.append(el("div", { class: "dup-row" },
+        el("span", { class: "dot", text: DUP_DOT[m.level] }),
+        el("span", { html: dupDescribe(m) }),
+        el("button", { class: "btn small", text: "Σύγκριση", onclick: () => dupCompare(ex, m) }),
+        m.kind === "doc" && m.fp ? el("button", { class: "btn small ghost", title: `Να μπει αμέσως μετά την ${m.label}, ώστε να είναι μαζί`,
+          text: "📍 Δίπλα της", onclick: () => { ex.place = { side: "after", fp: m.fp, label: m.label, section: m.section }; renderCorpusReview(); } }) : null));
+    }
+    if (top === "same") box.append(el("div", { class: "small muted", text: "Η άσκηση θα μπει κανονικά στο Word. Αν δεν τη θέλετε, πατήστε «Σύγκριση» → «Να μη μπει» ή το ✕ πάνω δεξιά." }));
+    editor.append(box);
+  }
   if (d.uncertain && d.uncertain.length) {
     editor.append(el("div", { class: "notes" }, el("b", { text: "Χρειάζεται έλεγχος:" }),
       el("ul", {}, ...d.uncertain.map((u) => el("li", { text: u })))));
@@ -1582,6 +1614,691 @@ function renderCorpusExercise(ex, i) {
   return card;
 }
 
+/* ---------- έλεγχος για ίδιες ασκήσεις στο έγγραφο */
+const DUP_TEXT = { same: "Υπάρχει ήδη", part: "Ίδιο ερώτημα", numbers: "Ίδια, άλλα νούμερα", similar: "Παρόμοια" };
+const DUP_DOT = { same: "🔴", part: "🟠", numbers: "🟠", similar: "🟡" };
+let dupTimer = null;
+let dupSeq = 0;
+
+function dupMatches(ex) { return S.corpus.dup?.matches?.[ex.id] || []; }
+
+function corpusDropExercise(ex) {
+  const C = S.corpus;
+  const i = C.exs.indexOf(ex);
+  if (i < 0) return;
+  C.exs.splice(i, 1);
+  renderCorpusReview();
+  renderCorpusImages();
+  corpusCheckDuplicates();
+}
+
+function corpusCheckDuplicates(delay = 400) {
+  clearTimeout(dupTimer);
+  dupTimer = setTimeout(runDupCheck, delay);
+}
+
+async function runDupCheck() {
+  const C = S.corpus;
+  const seq = ++dupSeq;
+  const ids = C.exs.map((x) => x.id);
+  if (!C.path || !ids.length) { C.dup = null; renderDupStatus(); return; }
+  C.dup = { ...(C.dup || {}), state: "checking" };
+  renderDupStatus();
+  let res;
+  try {
+    res = await api.corpus_check(C.path, C.exs.map((x) => x.data), $("#c-dup-sens").value);
+  } catch (e) {
+    res = { ok: false, error: String(e.message || e) };
+  }
+  if (seq !== dupSeq) return; // στο μεταξύ ξεκίνησε νεότερος έλεγχος
+  const matches = {};
+  if (res.ok) {
+    ids.forEach((id, i) => {
+      matches[id] = (res.matches[i] || []).map((m) => (m.kind === "batch" ? { ...m, otherId: ids[m.index] } : m))
+        .filter((m) => m.kind !== "batch" || C.exs.some((x) => x.id === m.otherId));
+    });
+  }
+  C.dup = { state: res.ok ? (res.off ? "off" : "done") : "error", error: res.error, matches,
+    existing: res.existing || 0, unread: res.unread || 0 };
+  renderCorpusReview();
+}
+
+function renderDupStatus() {
+  const C = S.corpus;
+  const st = $("#c-dup-status");
+  if (!st) return;
+  const d = C.dup;
+  st.innerHTML = "";
+  if (!C.path) { st.textContent = "Ο έλεγχος για ίδιες ασκήσεις γίνεται όταν επιλεγεί το αρχείο Word (βήμα 1)."; return; }
+  if (!d) { st.textContent = ""; return; }
+  if (d.state === "checking") { st.append(el("span", { class: "spinner" }), `Έλεγχος αν οι ασκήσεις υπάρχουν ήδη στο «${C.name}»…`); return; }
+  if (d.state === "off") { st.textContent = "Ο έλεγχος για ίδιες ασκήσεις είναι ανενεργός."; return; }
+  if (d.state === "error") { st.append(el("span", { style: "color:var(--warn)", text: `Ο έλεγχος για ίδιες ασκήσεις δεν έγινε: ${d.error || ""}` })); return; }
+  const tops = C.exs.map((x) => (dupMatches(x)[0] || {}).level).filter(Boolean);
+  const nSame = tops.filter((t) => t === "same").length;
+  const nOther = tops.length - nSame;
+  const checked = `ελέγχθηκαν ${d.existing} ασκήσεις του εγγράφου`;
+  if (!tops.length) {
+    st.append(el("span", { html: `✓ Καμία νέα άσκηση δεν υπάρχει ήδη στο έγγραφο <span class="muted">(${checked})</span>` }));
+  } else {
+    const parts = [];
+    if (nSame) parts.push(`<b class="same">🔴 ${nSame} ${nSame === 1 ? "υπάρχει" : "υπάρχουν"} ήδη</b>`);
+    if (nOther) parts.push(`<b class="warn">${nOther} με ομοιότητα</b>`);
+    st.append(el("span", { html: `${parts.join(" · ")} — δείτε τις σημειωμένες ασκήσεις <span class="muted">(${checked})</span>` }));
+  }
+  if (d.unread) st.append(el("span", { class: "muted", text: ` · ${d.unread} εξισώσεις του εγγράφου δεν διαβάστηκαν (παλιός τύπος εξισώσεων)` }));
+}
+
+function dupWhere(m) {
+  if (m.kind === "doc") return `<b>${escapeHtml(m.label || "(χωρίς αριθμό)")}</b> <span class="muted">(${escapeHtml(m.section || "")})</span>`;
+  const C = S.corpus;
+  const j = C.exs.findIndex((x) => x.id === m.otherId);
+  const job = j >= 0 ? C.jobs[C.exs[j].jobId] : null;
+  const img = job ? C.images.find((im) => im.id === job.imageIds[0]) : null;
+  return `τη νέα άσκηση <b>${escapeHtml(j >= 0 ? corpusExLabel(j) : "")}</b>` + (img ? ` <span class="muted">(εικόνα «${escapeHtml(img.name)}»)</span>` : "");
+}
+
+function dupDescribe(m) {
+  const pct = Math.floor((m.score || 0) * 100);
+  const where = dupWhere(m);
+  if (m.level === "same") {
+    const lead = m.kind === "doc" ? "Υπάρχει ήδη στο έγγραφο:" : "Ίδια με";
+    return `${lead} ${where}` + (pct < 100 ? ` — ίδια κατά ${pct}%` : "");
+  }
+  if (m.level === "part") {
+    const path = String(m.part || "0").split(".").map(Number);
+    return `Το ερώτημα <b>${escapeHtml(corpusItemLabel(path))}</b> υπάρχει ήδη στην ${where}` + (m.other_part ? `, ερώτημα <b>${escapeHtml(m.other_part)}</b>` : "");
+  }
+  if (m.level === "numbers") return `Ίδια διατύπωση με άλλα νούμερα: ${where}`;
+  return `Παρόμοια (${pct}%) με ${where}`;
+}
+
+function dupPartsFromData(d) {
+  const box = el("div");
+  box.append(el("div", { class: "dp l0" }, el("div", { html: mdToHtml(d.stem || "") })));
+  const walk = (items, path) => (items || []).forEach((it, k) => {
+    const p = [...path, k];
+    box.append(el("div", { class: `dp l${Math.min(p.length, 2)}` }, el("span", { class: "lab", text: corpusItemLabel(p) }),
+      el("div", { html: mdToHtml(it.text || "") })));
+    walk(it.items, p);
+  });
+  walk(d.items, []);
+  if (d.closing) box.append(el("div", { class: "dp l0" }, el("div", { html: mdToHtml(d.closing) })));
+  return box;
+}
+
+function dupPartsFromDoc(parts) {
+  const box = el("div");
+  for (const p of parts || []) {
+    box.append(el("div", { class: `dp l${Math.min(p.level || 0, 2)}` }, p.label ? el("span", { class: "lab", text: p.label }) : null,
+      el("div", { html: mdToHtml(p.md || "") })));
+  }
+  return box;
+}
+
+function dupCompare(ex, m) {
+  const C = S.corpus;
+  const i = C.exs.indexOf(ex);
+  $("#dup-title").textContent = `${DUP_DOT[m.level]} ${DUP_TEXT[m.level]}` + (m.score < 1 ? ` (ομοιότητα ${Math.floor(m.score * 100)}%)` : "");
+  if (m.kind === "doc") {
+    $("#dup-left-head").textContent = `Στο έγγραφο: ${m.label} — ${m.section}`;
+    $("#dup-left").replaceChildren(dupPartsFromDoc(m.parts));
+  } else {
+    const other = C.exs.find((x) => x.id === m.otherId);
+    $("#dup-left-head").textContent = `Νέα άσκηση ${corpusExLabel(C.exs.indexOf(other))}`;
+    $("#dup-left").replaceChildren(other ? dupPartsFromData(other.data) : el("div"));
+  }
+  $("#dup-right-head").textContent = `Νέα άσκηση ${corpusExLabel(i)} (από τη φωτογραφία)`;
+  $("#dup-right").replaceChildren(dupPartsFromData(ex.data));
+  const diffs = $("#dup-diffs");
+  diffs.innerHTML = "";
+  if (m.diffs && m.diffs.length) {
+    diffs.append(el("b", { text: "Πού διαφέρουν:" }));
+    const t = el("table", {}, el("tr", {}, el("th", { text: m.kind === "doc" ? "Στο έγγραφο" : "Η άλλη νέα άσκηση" }), el("th", { text: "Στη νέα άσκηση" })));
+    for (const d of m.diffs) t.append(el("tr", {}, el("td", { class: "old", text: d.old || "—" }), el("td", { class: "new", text: d.new || "—" })));
+    diffs.append(t);
+  } else if (m.level === "same") {
+    diffs.append(el("div", { class: "muted", text: "Το κείμενο και οι εξισώσεις ταυτίζονται." }));
+  } else if (m.level === "part") {
+    diffs.append(el("div", { class: "muted", text: `Το ερώτημα ${corpusItemLabel(String(m.part || "0").split(".").map(Number))} της νέας άσκησης ταυτίζεται με το ερώτημα ${m.other_part || ""} της ${m.label}.` }));
+  }
+  $("#dup-skip").hidden = false;
+  $("#dup-skip").onclick = () => { $("#dup").hidden = true; corpusDropExercise(ex); toast(`Η άσκηση αφαιρέθηκε από την εισαγωγή.`); };
+  $("#dup").hidden = false;
+}
+
+/* ---------- έλεγχος ολόκληρου αρχείου (συλλογή και, προαιρετικά, δεύτερο αρχείο) */
+S.audit = { path: "", other: null, res: null, running: false };
+
+function auditOpen() {
+  if (!S.corpus.path) { toast("Επιλέξτε πρώτα το αρχείο Word της συλλογής.", true); return; }
+  const card = $("#c-audit-card");
+  card.hidden = false;
+  if (S.audit.path !== S.corpus.path) Object.assign(S.audit, { path: S.corpus.path, res: null });
+  const st = S.app?.settings?.dup_check;
+  if (!S.audit.res) $("#c-audit-sens").value = ["low", "normal", "high"].includes(st) ? st : "normal";
+  renderAudit();
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function auditChooseOther() {
+  const r = await api.corpus_choose_other();
+  if (!r.ok) return;
+  S.audit.other = { path: r.path, name: r.name };
+  S.audit.res = null;
+  renderAudit();
+}
+
+async function auditRun() {
+  const A = S.audit;
+  if (!S.corpus.path || A.running) return;
+  A.running = true;
+  A.res = null;
+  renderAudit();
+  let res;
+  try {
+    res = await api.corpus_audit(S.corpus.path, A.other ? A.other.path : null, $("#c-audit-sens").value);
+  } catch (e) {
+    res = { ok: false, error: String(e.message || e) };
+  }
+  A.running = false;
+  A.res = res;
+  A.path = S.corpus.path;
+  if (res.ok) {
+    $("#c-audit-f-level").value = "";
+    $("#c-audit-f-scope").value = "";
+    $("#c-audit-f-sec").value = "";
+  }
+  renderAudit();
+}
+
+function auditEx(pr, side) {
+  const r = S.audit.res;
+  if (side === "a") return r.a.exercises[pr.a];
+  return (pr.cross ? r.b : r.a).exercises[pr.b];
+}
+
+function auditWhere(pr, side) {
+  const ex = auditEx(pr, side);
+  const file = side === "b" && pr.cross ? `«${S.audit.res.b.name}» ` : "";
+  return `${escapeHtml(file)}<b>${escapeHtml(ex?.label || "(χωρίς αριθμό)")}</b> <span class="where">(${escapeHtml(ex?.section || "")})</span>`;
+}
+
+function auditFiltered() {
+  const r = S.audit.res;
+  if (!r || !r.ok) return [];
+  const lv = $("#c-audit-f-level").value;
+  const sc = $("#c-audit-f-scope").value;
+  const sec = $("#c-audit-f-sec").value;
+  return r.pairs.filter((pr) => (!lv || pr.level === lv)
+    && (!sc || (sc === "cross") === !!pr.cross)
+    && (!sec || auditEx(pr, "a")?.section === sec || (!pr.cross && auditEx(pr, "b")?.section === sec)));
+}
+
+const AUDIT_SHOW = 300;
+
+function renderAudit() {
+  const A = S.audit;
+  if (!$("#c-audit-card")) return;
+  $("#c-audit-a").textContent = S.corpus.path ? S.corpus.name || S.corpus.path : "(δεν έχει επιλεγεί αρχείο)";
+  $("#c-audit-b").hidden = !A.other;
+  $("#c-audit-b-clear").hidden = !A.other;
+  $("#c-audit-b").textContent = A.other ? A.other.name : "";
+  $("#c-audit-other").textContent = A.other ? "Άλλο αρχείο…" : "Επιλογή αρχείου… (προαιρετικά)";
+  $("#c-audit-run").disabled = A.running || !S.corpus.path;
+  const bar = $("#c-audit-status-bar");
+  const st = $("#c-audit-status");
+  const list = $("#c-audit-list");
+  const filters = $("#c-audit-filters");
+  list.innerHTML = "";
+  st.innerHTML = "";
+  $("#c-audit-numbering")?.remove();
+  if (A.running) {
+    bar.hidden = false;
+    filters.hidden = true;
+    st.append(el("span", { class: "spinner" }), "Διαβάζονται και συγκρίνονται όλες οι ασκήσεις… (λίγα δευτερόλεπτα)");
+    return;
+  }
+  const r = A.res;
+  if (!r) { bar.hidden = true; filters.hidden = true; return; }
+  bar.hidden = false;
+  if (!r.ok) { filters.hidden = true; st.append(el("span", { style: "color:var(--warn)", text: r.error || "Ο έλεγχος δεν έγινε." })); return; }
+  const numbering = r.numbering && r.numbering.length
+    ? el("div", { class: "small", style: "color:var(--warn)", text: `⚠ Αρίθμηση: ${r.numbering.length} σημεία όπου δεν είναι συνεχόμενη (π.χ. ${r.numbering.slice(0, 2).join("· ")}). Ελέγξτε τα στο Word.` })
+    : el("div", { class: "small muted", text: "✓ Αρίθμηση: συνεχόμενη σε όλες τις ενότητες." });
+  numbering.id = "c-audit-numbering";
+  bar.append(numbering);
+  const n = (lv, cross) => r.pairs.filter((p) => p.level === lv && (cross === undefined || !!p.cross === cross)).length;
+  const files = `${r.a.exercises.length} ασκήσεις στη συλλογή` + (r.b ? `, ${r.b.exercises.length} στο «${r.b.name}»` : "");
+  if (!r.pairs.length) {
+    st.append(el("span", { html: `✓ Δεν βρέθηκαν ίδιες ή παρόμοιες ασκήσεις <span class="muted">(${escapeHtml(files)})</span>` }));
+    filters.hidden = true;
+    return;
+  }
+  const parts = [];
+  if (n("same")) parts.push(`<b class="same">🔴 ${n("same")} ίδιες</b>`);
+  if (n("numbers")) parts.push(`<b class="warn">🟠 ${n("numbers")} με άλλα νούμερα</b>`);
+  if (n("part")) parts.push(`<b class="warn">🟠 ${n("part")} με ίδιο ερώτημα</b>`);
+  if (n("similar")) parts.push(`🟡 ${n("similar")} παρόμοιες`);
+  let html = `Βρέθηκαν ${r.total} ζεύγη: ${parts.join(" · ")}`;
+  if (r.b) {
+    const cross = r.pairs.filter((p) => p.cross).length;
+    html += ` — <b>${cross}</b> από το «${escapeHtml(r.b.name)}» υπάρχουν/μοιάζουν με ασκήσεις της συλλογής`;
+  }
+  html += ` <span class="muted">(${escapeHtml(files)})</span>`;
+  st.append(el("span", { html }));
+  if (r.a.unread || r.b?.unread) st.append(el("span", { class: "muted", text: ` · ${(r.a.unread || 0) + (r.b?.unread || 0)} εξισώσεις δεν διαβάστηκαν (παλιός τύπος)` }));
+  if (r.truncated) st.append(el("span", { class: "muted", text: ` · εμφανίζονται τα ${r.pairs.length} σοβαρότερα· δοκιμάστε μικρότερη αυστηρότητα` }));
+  // φίλτρα
+  filters.hidden = false;
+  $("#c-audit-f-scope").hidden = !r.b;
+  const secSel = $("#c-audit-f-sec");
+  const cur = secSel.value;
+  const secs = [...new Set(r.pairs.flatMap((p) => [auditEx(p, "a")?.section, p.cross ? null : auditEx(p, "b")?.section]).filter(Boolean))];
+  secSel.innerHTML = "";
+  secSel.append(el("option", { value: "", text: "Όλες οι ενότητες" }), ...secs.map((x) => el("option", { value: x, text: x })));
+  secSel.value = secs.includes(cur) ? cur : "";
+  const shown = auditFiltered();
+  for (const pr of shown.slice(0, AUDIT_SHOW)) {
+    const pct = Math.floor(pr.score * 100);
+    let text;
+    if (pr.level === "part") {
+      text = `Ερώτημα <b>${escapeHtml(pr.part || "")}</b> της ${auditWhere(pr, "b")} = ερώτημα <b>${escapeHtml(pr.other_part || "")}</b> της ${auditWhere(pr, "a")}`;
+    } else {
+      text = pr.cross ? `${auditWhere(pr, "b")} ↔ συλλογή: ${auditWhere(pr, "a")}` : `${auditWhere(pr, "a")} ↔ ${auditWhere(pr, "b")}`;
+    }
+    const lab = { same: "Ίδιες", numbers: "Ίδιες, άλλα νούμερα", part: "Ίδιο ερώτημα", similar: `Παρόμοιες ${pct}%` }[pr.level];
+    list.append(el("div", { class: `audit-row ${pr.level}` },
+      el("span", { class: "dot", text: DUP_DOT[pr.level] }),
+      el("span", { class: `dup-badge ${pr.level}`, text: lab + (pr.level === "same" && pct < 100 ? ` ${pct}%` : "") }),
+      el("span", { class: "apair", html: text }),
+      pr.cross ? el("span", { class: "tag", text: "με το άλλο αρχείο" }) : null,
+      el("button", { class: "btn small", text: "Σύγκριση", onclick: () => auditCompare(pr) }),
+      pr.cross ? null : (pr.b === pr.a + 1 && auditEx(pr, "a")?.section === auditEx(pr, "b")?.section)
+        ? el("span", { class: "tag", text: "ήδη η μία μετά την άλλη" })
+        : el("button", { class: "btn small ghost", text: "↕ Μετακίνηση…", title: "Να μπουν η μία δίπλα στην άλλη",
+          onclick: () => openPlaceForMove([auditEx(pr, "a"), auditEx(pr, "b")], 1) })));
+  }
+  if (!shown.length) list.append(el("div", { class: "muted small", text: "Καμία με αυτά τα φίλτρα." }));
+  if (shown.length > AUDIT_SHOW) list.append(el("div", { class: "muted small", text: `…και ${shown.length - AUDIT_SHOW} ακόμα. Περιορίστε με τα φίλτρα.` }));
+}
+
+function auditCompare(pr) {
+  const r = S.audit.res;
+  const a = auditEx(pr, "a");
+  const b = auditEx(pr, "b");
+  const pct = Math.floor(pr.score * 100);
+  $("#dup-title").textContent = `${DUP_DOT[pr.level]} ${DUP_TEXT[pr.level]}` + (pr.score < 1 ? ` (ομοιότητα ${pct}%)` : "");
+  const nameB = pr.cross ? `«${r.b.name}»` : "Συλλογή";
+  $("#dup-left-head").textContent = `Συλλογή: ${a.label} — ${a.section}`;
+  $("#dup-left").replaceChildren(dupPartsFromDoc(a.parts));
+  $("#dup-right-head").textContent = `${nameB}: ${b.label} — ${b.section}`;
+  $("#dup-right").replaceChildren(dupPartsFromDoc(b.parts));
+  const diffs = $("#dup-diffs");
+  diffs.innerHTML = "";
+  if (pr.diffs && pr.diffs.length) {
+    diffs.append(el("b", { text: "Πού διαφέρουν:" }));
+    const t = el("table", {}, el("tr", {}, el("th", { text: `Αριστερά (${a.label})` }), el("th", { text: `Δεξιά (${b.label})` })));
+    for (const d of pr.diffs) t.append(el("tr", {}, el("td", { class: "old", text: d.old || "—" }), el("td", { class: "new", text: d.new || "—" })));
+    diffs.append(t);
+  } else if (pr.level === "part") {
+    diffs.append(el("div", { class: "muted", text: `Το ερώτημα ${pr.part} της ${b.label} ταυτίζεται με το ερώτημα ${pr.other_part} της ${a.label}.` }));
+  } else {
+    diffs.append(el("div", { class: "muted", text: "Το κείμενο και οι εξισώσεις ταυτίζονται." }));
+  }
+  $("#dup-skip").hidden = true;
+  $("#dup").hidden = false;
+}
+
+/* ---------- θέση νέων ασκήσεων και μετακίνηση ασκήσεων μέσα στο Word */
+async function loadDocEx() {
+  const C = S.corpus;
+  if (!C.path) { C.docEx = null; return; }
+  let res;
+  try { res = await api.corpus_exercises(C.path); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { C.docEx = null; return; }
+  C.docEx = res;
+  // οι θέσεις που έχουν οριστεί ακολουθούν την άσκηση (με το περιεχόμενό της), ακόμα κι αν άλλαξε ο αριθμός της
+  let lost = 0;
+  for (const ex of C.exs) {
+    if (!ex.place) continue;
+    const f = res.exercises.filter((e) => e.fp === ex.place.fp);
+    const hit = f.find((e) => e.label === ex.place.label) || f[0];
+    if (hit) Object.assign(ex.place, { label: hit.label, section: hit.section });
+    else { ex.place = null; lost += 1; }
+  }
+  if (lost) toast(`${lost} θέσεις που είχατε ορίσει δεν ισχύουν πια (άλλαξε το αρχείο) και οι ασκήσεις πάνε στο τέλος της ενότητας.`, true, 8000);
+  renderCorpusReview();
+}
+
+function secInfo(display) { return S.corpus.outline.find((h) => h.display === display) || null; }
+
+function labelAt(display, k) {
+  const o = secInfo(display);
+  return (o?.pattern || "%1.").replace("%1", fmtNum((o?.start || 1) + k, o?.formats?.[0]));
+}
+
+/** Πώς θα είναι η αρίθμηση μετά την εισαγωγή/μετακίνηση (προεπισκόπηση· ο τελικός έλεγχος γίνεται στο Word). */
+function planLayout(newItems, move) {
+  const D = S.corpus.docEx;
+  if (!D) return null;
+  const secs = new Map();
+  for (const h of S.corpus.outline) if (!secs.has(h.display)) secs.set(h.display, []);
+  for (const e of D.exercises) { if (!secs.has(e.section)) secs.set(e.section, []); secs.get(e.section).push({ old: e.label, fp: e.fp, doc: true }); }
+  const find = (fp, label) => {
+    for (const [sec, arr] of secs) {
+      let i = arr.findIndex((x) => x.doc && x.fp === fp && x.old === label);
+      if (i < 0) i = arr.findIndex((x) => x.doc && x.fp === fp);
+      if (i >= 0) return [sec, arr, i];
+    }
+    return null;
+  };
+  let moved = null;
+  if (move) {
+    const f = find(move.fp, move.label);
+    const a = find(move.anchor.fp, move.anchor.label);
+    if (f && a && f[2] !== undefined) {
+      moved = f[1].splice(f[2], 1)[0];
+      moved.moved = true;
+      const a2 = find(move.anchor.fp, move.anchor.label);
+      a2[1].splice(a2[2] + (move.side === "after" ? 1 : 0), 0, moved);
+    }
+  }
+  const labels = [];
+  newItems.forEach((n, k) => {
+    const item = { nw: k };
+    if (n.place) {
+      const f = find(n.place.fp, n.place.label);
+      if (!f) return;
+      const key = `${n.place.side}|${n.place.fp}`;
+      item.key = key;
+      let i = f[2] + (n.place.side === "after" ? 1 : 0);
+      if (n.place.side === "after") while (i < f[1].length && f[1][i].key === key) i += 1;
+      f[1].splice(i, 0, item);
+    } else if (n.section) {
+      if (!secs.has(n.section)) secs.set(n.section, []);
+      secs.get(n.section).push(item);
+    }
+  });
+  const changes = [];
+  for (const [sec, arr] of secs) {
+    arr.forEach((it, k) => {
+      it.label = labelAt(sec, k);
+      it.sec = sec;
+      if (it.nw !== undefined) labels[it.nw] = it.label;
+      else if (it.doc && !it.moved && it.old !== it.label) changes.push(it);
+    });
+  }
+  return { labels, notes: compressChanges(changes), moved };
+}
+
+function compressChanges(list) {
+  const num = (l) => { const m = /(\d+)\.?$/.exec(l || ""); return m ? +m[1] : NaN; };
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const a = run[0], b = run[run.length - 1];
+    out.push(run.length === 1 ? `${a.old} → ${a.label}` : `${a.old}–${b.old} → ${a.label}–${b.label} (${run.length} ασκήσεις)`);
+  };
+  for (const c of list) {
+    const p = run[run.length - 1];
+    if (p && p.sec === c.sec && num(c.old) === num(p.old) + 1 && num(c.label) === num(p.label) + 1) run.push(c);
+    else { flush(); run = [c]; }
+  }
+  flush();
+  return out;
+}
+
+let planCache = null;
+function corpusPlan() {
+  const C = S.corpus;
+  if (!C.docEx || !C.exs.length) return null;
+  const sec = corpusSection();
+  const key = JSON.stringify([C.docEx.mtime, sec?.display, C.exs.map((x) => [x.id, x.place?.side, x.place?.fp])]);
+  if (planCache && planCache.key === key) return planCache.plan;
+  const plan = planLayout(C.exs.map((x) => ({ place: x.place, section: sec?.display })), null);
+  planCache = { key, plan };
+  return plan;
+}
+
+function renderPlanNote() {
+  const box = $("#c-plan");
+  const plan = corpusPlan();
+  const placed = S.corpus.exs.filter((x) => x.place);
+  if (!plan || !placed.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = "";
+  box.append(el("b", { text: "📍 Νέες ασκήσεις σε συγκεκριμένη θέση:" }),
+    el("ul", {}, ...placed.map((x) => el("li", { text: `${corpusExLabel(S.corpus.exs.indexOf(x))}: ${x.place.side === "after" ? "μετά την" : "πριν από την"} ${x.place.label} (${x.place.section})` }))));
+  if (plan.notes.length) {
+    box.append(el("b", { text: "Θα αλλάξουν αριθμό (αυτόματα, από την αρίθμηση του Word):" }),
+      el("ul", {}, ...plan.notes.slice(0, 8).map((t) => el("li", { text: t }))));
+  }
+}
+
+const PLACE = { mode: "new", ex: null, cands: null, srcIdx: 0 };
+function placeMode() { return ($$('input[name="place-mode"]').find((r) => r.checked) || {}).value || "end"; }
+function setPlaceMode(v) { for (const r of $$('input[name="place-mode"]')) r.checked = r.value === v; $("#place-pick").hidden = v === "end"; }
+function normTxt(t) { return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
+
+function fillPlaceAnchors(selectIdx) {
+  const D = S.corpus.docEx;
+  const sel = $("#place-anchor");
+  const keep = selectIdx !== undefined ? String(selectIdx) : sel.value;
+  const q = normTxt($("#place-filter").value.trim());
+  sel.innerHTML = "";
+  if (!D) return;
+  const src = placeSource();
+  let group = null, cur = "";
+  D.exercises.forEach((e, i) => {
+    if (src && src.fp === e.fp && src.label === e.label) return; // όχι δίπλα στον εαυτό της
+    if (q && !normTxt(e.label).startsWith(q) && !normTxt(e.snippet).includes(q) && !normTxt(e.section).includes(q)) return;
+    if (e.section !== cur) { cur = e.section; group = el("optgroup", { label: e.section }); sel.append(group); }
+    group.append(el("option", { value: String(i), text: `${e.label} — ${e.snippet}` }));
+  });
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  renderPlacePreview();
+}
+
+function placeSource() {
+  if (PLACE.mode !== "move") return null;
+  if (PLACE.cands) return PLACE.cands[PLACE.srcIdx];
+  const D = S.corpus.docEx;
+  const v = $("#place-what-sel")?.value;
+  return D && v !== undefined && v !== "" ? D.exercises[+v] : null;
+}
+
+function placeAnchor() {
+  const D = S.corpus.docEx;
+  const v = $("#place-anchor").value;
+  return D && v !== "" ? D.exercises[+v] : null;
+}
+
+function renderPlacePreview() {
+  const box = $("#place-preview");
+  box.innerHTML = "";
+  $("#place-ok").disabled = false;
+  const mode = placeMode();
+  const anchor = placeAnchor();
+  const C = S.corpus;
+  if (PLACE.mode === "new") {
+    const items = C.exs.map((x) => ({ place: x.place, section: corpusSection()?.display }));
+    const k = C.exs.indexOf(PLACE.ex);
+    if (mode === "end") items[k].place = null;
+    else if (anchor) items[k].place = { side: mode, fp: anchor.fp, label: anchor.label };
+    else { box.textContent = "Διαλέξτε άσκηση από τη λίστα."; return; }
+    if (mode === "end" && !corpusSection()) { box.textContent = "Διαλέξτε πρώτα ενότητα στο βήμα 1."; return; }
+    const plan = planLayout(items, null);
+    if (!plan) return;
+    box.append(el("div", { html: `Η νέα άσκηση θα πάρει τον αριθμό <b>${escapeHtml(plan.labels[k] || "")}</b>.` }));
+    if (plan.notes.length) box.append(el("div", { text: "Θα αλλάξουν αριθμό:" }), el("ul", {}, ...plan.notes.slice(0, 6).map((t) => el("li", { text: t }))));
+  } else {
+    const src = placeSource();
+    $("#place-ok").disabled = false;
+    if (!src || !anchor) { box.textContent = "Διαλέξτε ποια άσκηση μετακινείται και δίπλα σε ποια."; return; }
+    const exs = S.corpus.docEx.exercises;
+    const si = exs.findIndex((e) => e.fp === src.fp && e.label === src.label);
+    const ai = exs.findIndex((e) => e.fp === anchor.fp && e.label === anchor.label);
+    if (exs[si]?.section === exs[ai]?.section && ((mode !== "before" && si === ai + 1) || (mode === "before" && si === ai - 1))) {
+      box.textContent = `Η ${src.label} είναι ήδη ${mode === "before" ? "πριν από" : "μετά από"} την ${anchor.label}.`;
+      $("#place-ok").disabled = true;
+      return;
+    }
+    const plan = planLayout([], { fp: src.fp, label: src.label, side: mode === "before" ? "before" : "after", anchor: { fp: anchor.fp, label: anchor.label } });
+    if (!plan || !plan.moved) return;
+    box.append(el("div", { html: `Η <b>${escapeHtml(src.label)}</b> θα γίνει <b>${escapeHtml(plan.moved.label)}</b> (${escapeHtml(plan.moved.sec)}).` }));
+    if (plan.notes.length) box.append(el("div", { text: "Θα αλλάξουν αριθμό:" }), el("ul", {}, ...plan.notes.slice(0, 6).map((t) => el("li", { text: t }))));
+    box.append(el("div", { class: "muted small", text: "Πριν από την αλλαγή κρατιέται αντίγραφο ασφαλείας και γίνονται έλεγχοι ότι δεν χάθηκε τίποτα. Κλείστε το αρχείο στο Word." }));
+  }
+}
+
+async function openPlaceForNew(ex) {
+  const C = S.corpus;
+  if (!C.path) { toast("Επιλέξτε πρώτα το αρχείο Word (βήμα 1).", true); return; }
+  if (!C.docEx) await loadDocEx();
+  if (!C.docEx) { toast("Δεν διαβάστηκαν οι ασκήσεις του αρχείου.", true); return; }
+  Object.assign(PLACE, { mode: "new", ex, cands: null });
+  const i = C.exs.indexOf(ex);
+  $("#place-title").textContent = `Θέση της νέας άσκησης ${corpusExLabel(i)}`;
+  $("#place-what").innerHTML = "";
+  $("#place-end-wrap").hidden = false;
+  const sec = corpusSection();
+  $("#place-end-text").textContent = sec ? `Στο τέλος της ενότητας «${sec.display}» (όπως όλες)` : "Στο τέλος της ενότητας του βήματος 1";
+  const sug = $("#place-suggest");
+  sug.innerHTML = "";
+  for (const m of dupMatches(ex).filter((m) => m.kind === "doc" && m.fp)) {
+    sug.append(el("button", { class: "btn small", text: `${DUP_DOT[m.level]} Μετά την ${m.label} (${DUP_TEXT[m.level].toLowerCase()})`, onclick: () => {
+      const idx = C.docEx.exercises.findIndex((e) => e.fp === m.fp && e.label === m.label);
+      setPlaceMode("after");
+      $("#place-filter").value = "";
+      fillPlaceAnchors(idx);
+    } }));
+  }
+  $("#place-filter").value = "";
+  setPlaceMode(ex.place ? ex.place.side : "end");
+  const cur = ex.place ? C.docEx.exercises.findIndex((e) => e.fp === ex.place.fp && e.label === ex.place.label) : undefined;
+  fillPlaceAnchors(cur);
+  $("#place-ok").textContent = "Εφαρμογή";
+  $("#place").hidden = false;
+}
+
+async function openPlaceForMove(cands, srcIdx) {
+  const C = S.corpus;
+  if (!C.path) { toast("Επιλέξτε πρώτα το αρχείο Word.", true); return; }
+  await loadDocEx();
+  if (!C.docEx) { toast("Δεν διαβάστηκαν οι ασκήσεις του αρχείου.", true); return; }
+  Object.assign(PLACE, { mode: "move", ex: null, cands: cands ? cands.map((c) => ({ fp: c.fp, label: c.label, section: c.section })) : null, srcIdx });
+  $("#place-title").textContent = "Μετακίνηση άσκησης μέσα στο Word";
+  const what = $("#place-what");
+  what.innerHTML = "";
+  what.append(el("b", { text: "Ποια άσκηση μετακινείται:" }));
+  if (PLACE.cands) {
+    PLACE.cands.forEach((c, k) => {
+      what.append(el("label", { class: "what-opt" },
+        el("input", { type: "radio", name: "place-src", checked: k === srcIdx, onchange: () => {
+          PLACE.srcIdx = k;
+          const other = PLACE.cands[1 - k];
+          fillPlaceAnchors(C.docEx.exercises.findIndex((e) => e.fp === other.fp && e.label === other.label));
+        } }),
+        el("span", { html: `<b>${escapeHtml(c.label)}</b> <span class="muted">(${escapeHtml(c.section)})</span>` })));
+    });
+  } else {
+    const sel = el("select", { id: "place-what-sel", onchange: () => fillPlaceAnchors() });
+    let group = null, cur = "";
+    C.docEx.exercises.forEach((e, i) => {
+      if (e.section !== cur) { cur = e.section; group = el("optgroup", { label: e.section }); sel.append(group); }
+      group.append(el("option", { value: String(i), text: `${e.label} — ${e.snippet}` }));
+    });
+    what.append(sel);
+  }
+  $("#place-end-wrap").hidden = true;
+  $("#place-suggest").innerHTML = "";
+  $("#place-filter").value = "";
+  setPlaceMode("after");
+  let anchorIdx;
+  if (PLACE.cands) {
+    const other = PLACE.cands[1 - srcIdx];
+    anchorIdx = C.docEx.exercises.findIndex((e) => e.fp === other.fp && e.label === other.label);
+  }
+  fillPlaceAnchors(anchorIdx);
+  $("#place-ok").textContent = "Μετακίνηση στο Word";
+  $("#place").hidden = false;
+}
+
+async function placeApply() {
+  const mode = placeMode();
+  const anchor = placeAnchor();
+  if (PLACE.mode === "new") {
+    if (mode === "end") PLACE.ex.place = null;
+    else if (!anchor) { toast("Διαλέξτε άσκηση από τη λίστα.", true); return; }
+    else PLACE.ex.place = { side: mode, fp: anchor.fp, label: anchor.label, section: anchor.section };
+    $("#place").hidden = true;
+    renderCorpusReview();
+    return;
+  }
+  const src = placeSource();
+  if (!src || !anchor) { toast("Διαλέξτε ποια άσκηση μετακινείται και δίπλα σε ποια.", true); return; }
+  const side = mode === "before" ? "before" : "after";
+  if (!confirm(`Η ${src.label} θα μπει ${side === "after" ? "μετά από" : "πριν από"} την ${anchor.label} στο Word.\n\nΒεβαιωθείτε ότι το αρχείο είναι κλειστό στο Word. Συνέχεια;`)) return;
+  const btn = $("#place-ok");
+  btn.disabled = true;
+  btn.textContent = "Μετακίνηση…";
+  let res;
+  try {
+    res = await api.corpus_move(S.corpus.path, { fp: src.fp, label: src.label }, { fp: anchor.fp, label: anchor.label }, side);
+  } catch (e) {
+    res = { ok: false, error: String(e.message || e) };
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Μετακίνηση στο Word";
+  }
+  $("#place").hidden = true;
+  await afterDocChange(res, "move");
+}
+
+function changeReport(res, kind) {
+  const box = el("div", { class: "move-res" + (res.ok ? "" : " err") });
+  if (!res.ok) {
+    box.append(el("b", { text: kind === "undo" ? "Η αναίρεση δεν έγινε" : "Η μετακίνηση δεν έγινε" }), el("div", { text: res.error || "" }));
+    return box;
+  }
+  if (kind === "undo") {
+    box.append(el("b", { text: "✓ Αναιρέθηκε η τελευταία αλλαγή" }),
+      el("div", { class: "small muted", text: `Το αρχείο επανήλθε από το αντίγραφο ${res.restored}. Η κατάσταση πριν από την αναίρεση κρατήθηκε στο ${res.backup}.` }));
+    return box;
+  }
+  box.append(el("b", { text: `✓ Η ${res.moved_from} μετακινήθηκε ${res.side === "after" ? "μετά από" : "πριν από"} την ${res.anchor} και έγινε ${res.moved_to}` }));
+  if (res.renumbered && res.renumbered.length) box.append(el("div", { text: "Νέοι αριθμοί (αυτόματα από το Word):" }), el("ul", {}, ...res.renumbered.slice(0, 10).map((t) => el("li", { text: t }))));
+  if (res.warnings && res.warnings.length) box.append(el("div", { class: "notes" }, el("b", { text: "Ελέγξτε:" }), el("ul", {}, ...res.warnings.map((w) => el("li", { text: w })))));
+  const det = el("details", {}, el("summary", { text: "Έλεγχοι που έγιναν" }), el("ul", {}, ...(res.checks || []).map((t) => el("li", { text: "✓ " + t }))));
+  box.append(det);
+  const row = el("div", { class: "row" });
+  if (res.backup && res.sha) {
+    row.append(el("button", { class: "btn small", text: "↶ Αναίρεση", onclick: async () => {
+      if (!confirm("Να επανέλθει το αρχείο όπως ήταν πριν από αυτή τη μετακίνηση;")) return;
+      let r;
+      try { r = await api.corpus_undo(S.corpus.path, res.backup, res.sha); } catch (e) { r = { ok: false, error: String(e.message || e) }; }
+      await afterDocChange(r, "undo");
+    } }));
+  }
+  row.append(el("button", { class: "btn small ghost", text: "Άνοιγμα στο Word", onclick: () => api.open_file(S.corpus.path) }));
+  box.append(row);
+  if (res.backup) box.append(el("div", { class: "muted small", text: `Αντίγραφο του αρχείου πριν από την αλλαγή: ${res.backup}` }));
+  return box;
+}
+
+async function afterDocChange(res, kind) {
+  const holder = $("#c-audit-moveres");
+  $("#c-audit-card").hidden = false;
+  holder.replaceChildren(changeReport(res, kind));
+  holder.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (!res.ok) return;
+  toast(kind === "undo" ? "Η αλλαγή αναιρέθηκε." : `Η ${res.moved_from} έγινε ${res.moved_to}.`);
+  await corpusOpen(S.corpus.path, true);
+  if (S.audit.res && S.audit.res.ok) auditRun();
+}
+
 /* ---------- εισαγωγή */
 function corpusPayload() {
   return S.corpus.exs.map((ex) => {
@@ -1595,7 +2312,8 @@ function corpusPayload() {
         fr = { mode: "redraw", spec_json: ex.data.figure.spec_json, png: r.png, svg: r.svg, width_cm: r.width_cm };
       }
     }
-    return { stem: ex.data.stem, items: ex.data.items, closing: ex.data.closing, figure_render: fr };
+    const place = ex.place ? { side: ex.place.side, fp: ex.place.fp, label: ex.place.label } : null;
+    return { stem: ex.data.stem, items: ex.data.items, closing: ex.data.closing, figure_render: fr, place };
   });
 }
 
@@ -1603,19 +2321,28 @@ async function corpusInsert() {
   const C = S.corpus;
   const sec = corpusSection();
   if (!C.path) { toast("Επιλέξτε πρώτα το αρχείο Word (βήμα 1).", true); return; }
-  if (!sec) { toast("Επιλέξτε στη λίστα του βήματος 1 την ενότητα όπου θα μπουν οι ασκήσεις.", true); window.scrollTo(0, 0); return; }
   if (!C.exs.length) { toast("Δεν υπάρχουν ασκήσεις για εισαγωγή.", true); return; }
+  const unplaced = C.exs.filter((x) => !x.place).length;
+  if (!sec && unplaced) { toast("Επιλέξτε στη λίστα του βήματος 1 την ενότητα όπου θα μπουν οι ασκήσεις (ή ορίστε θέση 📍 σε κάθε άσκηση).", true); window.scrollTo(0, 0); return; }
   const pending = C.images.filter((im) => im.status === "pending").length;
   if (pending) { toast("Περιμένετε να ολοκληρωθεί η μεταγραφή όλων των εικόνων.", true); return; }
   const failed = C.images.filter((im) => im.status === "error" || im.status === "new").length;
   if (failed && !confirm(`${failed} εικόνα(ες) δεν έχουν μεταγραφεί και θα παραλειφθούν. Συνέχεια;`)) return;
-  if (!confirm(`Θα μπουν ${C.exs.length} ασκήσεις (${corpusExLabel(0)} – ${corpusExLabel(C.exs.length - 1)}) στο τέλος της ενότητας «${sec.display}».\n\nΒεβαιωθείτε ότι το αρχείο είναι κλειστό στο Word. Συνέχεια;`)) return;
+  const nSame = C.exs.filter((x) => dupMatches(x).some((m) => m.level === "same" && m.kind === "doc")).length;
+  const sameNote = nSame ? `\n\nΠροσοχή: ${nSame === 1 ? "1 άσκηση υπάρχει" : `${nSame} ασκήσεις υπάρχουν`} ήδη στο έγγραφο (κόκκινη ένδειξη) και θα ${nSame === 1 ? "μπει" : "μπουν"} ξανά.` : "";
+  const placedN = C.exs.length - unplaced;
+  const plan = corpusPlan();
+  const where = placedN
+    ? (unplaced ? `${unplaced} στο τέλος της ενότητας «${sec.display}» και ${placedN} στις θέσεις που ορίσατε (📍)` : "στις θέσεις που ορίσατε (📍)")
+    : `(${corpusExLabel(0)} – ${corpusExLabel(C.exs.length - 1)}) στο τέλος της ενότητας «${sec.display}»`;
+  const renum = plan && plan.notes.length ? `\n\nΘα αλλάξουν αριθμό (αυτόματα): ${plan.notes.slice(0, 4).join(" · ")}${plan.notes.length > 4 ? " …" : ""}` : "";
+  if (!confirm(`Θα μπουν ${C.exs.length} ασκήσεις ${where}.${renum}${sameNote}\n\nΒεβαιωθείτε ότι το αρχείο είναι κλειστό στο Word. Συνέχεια;`)) return;
   const btn = $("#c-insert");
   btn.disabled = true;
   btn.textContent = "Εισαγωγή…";
   let res;
   try {
-    res = await api.corpus_insert(C.path, sec.key, corpusPayload());
+    res = await api.corpus_insert(C.path, sec ? sec.key : null, corpusPayload());
   } catch (e) {
     res = { ok: false, error: String(e.message || e) };
   } finally {
@@ -1633,19 +2360,33 @@ async function corpusInsert() {
   }
   done.append(...[
     el("div", { class: "row" }, el("span", { class: "okmark", text: "✓" }),
-      el("h2", { style: "margin:0", text: `Προστέθηκαν ${res.inserted} ασκήσεις (${res.first_label} – ${res.last_label}) στο «${sec.display}»` })),
+      el("h2", { style: "margin:0", text: placedN
+        ? `Προστέθηκαν ${res.inserted} ασκήσεις: ${(res.labels || []).join(", ")}`
+        : `Προστέθηκαν ${res.inserted} ασκήσεις (${res.first_label} – ${res.last_label}) στο «${sec.display}»` })),
     el("div", { class: "path", text: res.path }),
     el("div", { class: "row" },
       el("button", { class: "btn primary", text: "Άνοιγμα στο Word", onclick: () => api.open_file(res.path) }),
       el("button", { class: "btn", text: "Άνοιγμα φακέλου", onclick: () => api.open_folder(res.path) })),
     res.backup ? el("p", { class: "muted small", text: `Αντίγραφο του αρχείου πριν από την αλλαγή: ${res.backup}` }) : null,
     res.removed_placeholders ? el("p", { class: "muted small", text: `Αφαιρέθηκαν ${res.removed_placeholders} κενές αριθμημένες γραμμές που υπήρχαν στην ενότητα.` }) : null,
+    res.renumbered && res.renumbered.length ? el("div", { class: "small" }, el("b", { text: "Άλλαξαν αριθμό (αυτόματα από το Word):" }),
+      el("ul", {}, ...res.renumbered.slice(0, 10).map((t) => el("li", { text: t })))) : null,
     res.warnings && res.warnings.length ? el("div", { class: "notes" }, el("b", { text: "Σημειώσεις:" }), el("ul", {}, ...res.warnings.map((w) => el("li", { text: w })))) : null,
+    res.checks && res.checks.length ? el("details", { class: "small" }, el("summary", { text: "Έλεγχοι που έγιναν πριν από την αποθήκευση" }),
+      el("ul", {}, ...res.checks.map((t) => el("li", { text: "✓ " + t })))) : null,
+    res.backup && res.sha ? el("div", { class: "row" }, el("button", { class: "btn small", text: "↶ Αναίρεση της εισαγωγής", onclick: async () => {
+      if (!confirm("Να επανέλθει το αρχείο όπως ήταν πριν από την εισαγωγή; (Οι ασκήσεις δεν θα υπάρχουν πια ούτε εδώ.)")) return;
+      let r;
+      try { r = await api.corpus_undo(C.path, res.backup, res.sha); } catch (e) { r = { ok: false, error: String(e.message || e) }; }
+      if (r.ok) { toast("Η εισαγωγή αναιρέθηκε."); done.hidden = true; await corpusOpen(C.path, true); } else toast(r.error, true, 8000);
+    } })) : null,
     el("p", { class: "muted small", text: "Για την επόμενη ενότητα: επιλέξτε τη στη λίστα του βήματος 1 και προσθέστε νέες εικόνες." }),
   ].filter(Boolean));
   // νέα παρτίδα: οι ασκήσεις μπήκαν στο Word
-  Object.assign(C, { images: [], exs: [], jobs: {}, manual: false, outline: res.outline || C.outline });
+  Object.assign(C, { images: [], exs: [], jobs: {}, manual: false, outline: res.outline || C.outline, dup: null });
   renderCorpus();
+  loadDocEx();
+  if (S.audit.res) S.audit.res = null, renderAudit();
   done.scrollIntoView({ behavior: "smooth" });
 }
 
@@ -1661,11 +2402,26 @@ function bindCorpus() {
   $("#c-sort-time").onclick = () => corpusSort("time");
   $("#c-clear").onclick = () => {
     if (!S.corpus.images.length || !confirm("Να αφαιρεθούν όλες οι εικόνες και οι μεταγραφές τους;")) return;
-    Object.assign(S.corpus, { images: [], exs: [], jobs: {}, manual: false });
+    Object.assign(S.corpus, { images: [], exs: [], jobs: {}, manual: false, dup: null });
     renderCorpus();
   };
   $("#c-transcribe").onclick = () => corpusTranscribe();
   $("#c-insert").onclick = corpusInsert;
+  $("#c-dup-sens").value = S.app?.settings?.dup_check || "normal";
+  $("#c-dup-sens").onchange = (e) => { if (S.app?.settings) S.app.settings.dup_check = e.target.value; corpusCheckDuplicates(0); };
+  $("#c-dup-recheck").onclick = () => corpusCheckDuplicates(0);
+  $("#c-audit-open").onclick = auditOpen;
+  $("#c-audit-close").onclick = () => { $("#c-audit-card").hidden = true; };
+  $("#c-audit-other").onclick = auditChooseOther;
+  $("#c-audit-b-clear").onclick = () => { S.audit.other = null; S.audit.res = null; renderAudit(); };
+  $("#c-audit-run").onclick = auditRun;
+  $("#c-audit-move").onclick = () => openPlaceForMove(null, 0);
+  $("#place-ok").onclick = placeApply;
+  $("#place-filter").oninput = () => fillPlaceAnchors();
+  $("#place-anchor").onchange = () => { if (placeMode() === "end") setPlaceMode("after"); renderPlacePreview(); };
+  for (const r of $$('input[name="place-mode"]')) r.onchange = () => { $("#place-pick").hidden = placeMode() === "end"; renderPlacePreview(); };
+  $("#c-audit-sens").onchange = () => { if (S.audit.res) auditRun(); };
+  for (const id of ["#c-audit-f-level", "#c-audit-f-scope", "#c-audit-f-sec"]) $(id).onchange = renderAudit;
   document.addEventListener("paste", async (e) => {
     if (S.mode !== "corpus") return;
     const items = Array.from(e.clipboardData?.items || []).filter((it) => it.type.startsWith("image/"));

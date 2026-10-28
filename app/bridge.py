@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import traceback
+import unicodedata
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -523,6 +524,136 @@ class Api:
             traceback.print_exc()
             for job_id, _ in jobs:
                 self.emit("corpus_transcribed", {"job_id": job_id, "error": f"Απρόσμενο σφάλμα: {exc}"})
+
+    def corpus_check(self, path: str, exercises: list[dict], sensitivity: str | None = None) -> dict:
+        """Έλεγχος αν οι νέες ασκήσεις υπάρχουν ήδη (ίδιες ή περίπου ίδιες) στο έγγραφο ή μεταξύ τους.
+        Γίνεται τοπικά· το έγγραφο διαβάζεται ξανά μόνο όταν αλλάξει."""
+        from .corpus_doc import CorpusError
+        from .duplicates import SENSITIVITY, check, index_of
+
+        sens = sensitivity or self._settings.dup_check or "normal"
+        if sens not in SENSITIVITY:
+            sens = "normal"
+        if sensitivity and sensitivity != self._settings.dup_check:
+            self._settings.dup_check = sens
+            self._settings.save()
+        exercises = exercises or []
+        if sens == "off":
+            return {"ok": True, "off": True, "sensitivity": sens, "matches": [[] for _ in exercises]}
+        p = Path(path or "")
+        if not path or not p.exists():
+            return {"ok": False, "error": "Δεν βρέθηκε το αρχείο Word της συλλογής.", "sensitivity": sens}
+        try:
+            idx = index_of(p)
+            matches = check(exercises, idx["exercises"], sens)
+        except CorpusError as exc:
+            return {"ok": False, "error": str(exc), "sensitivity": sens}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Ο έλεγχος δεν έγινε: {exc}", "sensitivity": sens}
+        return {"ok": True, "sensitivity": sens, "matches": matches, "existing": len(idx["exercises"]),
+                "equations": idx["equations"], "unread": idx["unread"]}
+
+    def corpus_choose_other(self) -> dict:
+        """Επιλογή δεύτερου αρχείου Word για σύγκριση με τη συλλογή."""
+        path = self._file_dialog(open_=True, types=("Έγγραφα Word (*.docx)",))
+        if not path:
+            return {"ok": False, "cancelled": True}
+        return {"ok": True, "path": path, "name": Path(path).name}
+
+    def corpus_audit(self, path: str, other_path: str | None = None, sensitivity: str | None = None) -> dict:
+        """Έλεγχος ολόκληρου του αρχείου για ίδιες/παρόμοιες ασκήσεις — μέσα στο ίδιο το αρχείο και,
+        αν δοθεί, με ένα δεύτερο αρχείο. Τίποτα δεν αλλάζει στα αρχεία."""
+        from .corpus_doc import CorpusError
+        from .duplicates import SENSITIVITY, audit, index_of
+
+        sens = sensitivity if sensitivity in SENSITIVITY and sensitivity != "off" else "normal"
+        files = [("a", path)] + ([("b", other_path)] if other_path else [])
+        data: dict = {}
+        for tag, fp in files:
+            p = Path(fp or "")
+            if not fp or not p.exists():
+                return {"ok": False, "error": f"Δεν βρέθηκε το αρχείο «{p.name or fp}»."}
+            if p.suffix.lower() != ".docx":
+                return {"ok": False, "error": f"Το «{p.name}» δεν είναι έγγραφο Word .docx."}
+            try:
+                idx = index_of(p)
+            except CorpusError as exc:
+                return {"ok": False, "error": f"«{p.name}»: {exc}"}
+            except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
+                return {"ok": False, "error": f"Το «{p.name}» δεν διαβάστηκε: {exc}"}
+            data[tag] = {"path": str(p), "name": p.name, "exercises": idx["exercises"],
+                         "equations": idx["equations"], "unread": idx["unread"]}
+        if other_path and Path(other_path).resolve() == Path(path).resolve():
+            return {"ok": False, "error": "Το δεύτερο αρχείο είναι το ίδιο με τη συλλογή."}
+        try:
+            res = audit(data["a"]["exercises"], data["b"]["exercises"] if "b" in data else None, sens)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Ο έλεγχος δεν έγινε: {exc}"}
+        from .corpus_doc import numbering_issues
+
+        return {"ok": True, "sensitivity": sens, "a": data["a"], "b": data.get("b"), **res,
+                "numbering": numbering_issues(data["a"]["exercises"])}
+
+    def corpus_exercises(self, path: str) -> dict:
+        """Οι ασκήσεις του αρχείου (αριθμός, ενότητα, αναγνωριστικό περιεχομένου, αρχή κειμένου) — για την
+        επιλογή θέσης και την προεπισκόπηση της νέας αρίθμησης."""
+        from .corpus_doc import CorpusError
+        from .duplicates import index_of, pretty
+
+        p = Path(path or "")
+        if not path or not p.exists():
+            return {"ok": False, "error": "Δεν βρέθηκε το αρχείο Word της συλλογής."}
+        try:
+            idx = index_of(p)
+        except CorpusError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Το αρχείο δεν διαβάστηκε: {exc}"}
+        out = []
+        for e in idx["exercises"]:
+            text = pretty(" ".join(x["md"] for x in e["parts"][:1]))
+            # χωρίς συνδυαστικά σημάδια (βέλος διανύσματος κ.λπ.): στις λίστες επιλογής φαίνονται ως κουτάκια
+            text = re.sub(r"[\u0300-\u036f\u20d0-\u20ff]", "", unicodedata.normalize("NFC", text))
+            out.append({"label": e["label"], "section": e["section"], "fp": e["fp"],
+                        "snippet": text[:110] + ("…" if len(text) > 110 else "")})
+        return {"ok": True, "path": str(p), "mtime": p.stat().st_mtime_ns, "exercises": out}
+
+    def corpus_move(self, path: str, src: dict, anchor: dict, side: str) -> dict:
+        """Μετακίνηση άσκησης πριν/μετά από άλλη (π.χ. για να μπουν μαζί οι ομοειδείς). Κρατιέται πάντα αντίγραφο
+        ασφαλείας και γίνονται έλεγχοι ακεραιότητας πριν από την αποθήκευση."""
+        from .corpus_doc import CorpusError, move_in, outline_of
+
+        try:
+            info = move_in(path, src or {}, anchor or {}, side, make_backup=True)
+            outline = outline_of(path)
+        except CorpusError as exc:
+            return {"ok": False, "error": str(exc)}
+        except PermissionError:
+            return {"ok": False, "error": "Το αρχείο είναι ανοιχτό στο Word ή δεν επιτρέπεται η εγγραφή. Κλείστε το και ξαναδοκιμάστε."}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Απρόσμενο σφάλμα: {exc}"}
+        return {"ok": True, **info, "outline": outline}
+
+    def corpus_undo(self, path: str, backup_path: str, sha: str) -> dict:
+        """Αναίρεση της τελευταίας αλλαγής (μετακίνησης ή εισαγωγής) από το αντίγραφο ασφαλείας."""
+        from .corpus_doc import CorpusError, outline_of, undo_change
+
+        try:
+            info = undo_change(path, backup_path, sha)
+            outline = outline_of(path)
+        except CorpusError as exc:
+            return {"ok": False, "error": str(exc)}
+        except PermissionError:
+            return {"ok": False, "error": "Το αρχείο είναι ανοιχτό στο Word. Κλείστε το και ξαναδοκιμάστε."}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": f"Απρόσμενο σφάλμα: {exc}"}
+        return {"ok": True, **info, "outline": outline}
 
     def corpus_insert(self, path: str, key: dict, exercises: list[dict]) -> dict:
         """Εισαγωγή των ασκήσεων στο τέλος της ενότητας `key` του αρχείου `path`.

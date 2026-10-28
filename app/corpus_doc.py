@@ -567,6 +567,23 @@ class CorpusDoc:
                 return True
         return el.find(".//m:oMath", NS) is not None or el.find(".//m:oMathPara", NS) is not None
 
+    def _ex_start(self, j: int, ex_num: str | None) -> bool:
+        """Αρχή άσκησης: αριθμημένη παράγραφος επιπέδου 0 της αρίθμησης ασκήσεων, με περιεχόμενο — ή κενή αλλά
+        ακολουθούμενη αμέσως από τα ερωτήματά της (άσκηση χωρίς εκφώνηση: «6.3» και από κάτω a., b.)."""
+        el = self.body[j]
+        if not ex_num or etree.QName(el).localname != "p":
+            return False
+        np_ = self.numpr(el)
+        if not np_ or np_[0] != ex_num or np_[1] != 0:
+            return False
+        if self.has_content(el):
+            return True
+        nxt = self.body[j + 1] if j + 1 < len(self.body) else None
+        if nxt is None or etree.QName(nxt).localname != "p":
+            return False
+        n2 = self.numpr(nxt)
+        return bool(n2 and n2[0] == ex_num and n2[1] > 0)
+
     # ----------------------------------------------------------------- διάρθρωση
     def _walk_labels(self):
         """Για κάθε παράγραφο του σώματος: (θέση, στοιχείο, αριθμός λίστας όπως τον δείχνει το Word)."""
@@ -638,9 +655,7 @@ class CorpusDoc:
             count, last_label = 0, ""
             if ex_num:
                 for j in range(h["index"] + 1, end):
-                    el = self.body[j]
-                    np_ = self.numpr(el) if etree.QName(el).localname == "p" else None
-                    if np_ and np_[0] == ex_num and np_[1] == 0 and self.has_content(el):
+                    if self._ex_start(j, ex_num):
                         count += 1
                         last_label = labels.get(j, "")
             h["exercises"] = count
@@ -884,18 +899,33 @@ class CorpusDoc:
         return rid
 
     # ----------------------------------------------------------------- εισαγωγή
-    def insert(self, key: dict, exercises: list[dict], workdir: Path, math_font: str = "Cambria Math") -> dict:
+    def insert(self, key: dict, exercises: list[dict], workdir: Path, math_font: str = "Cambria Math",
+               at: dict | None = None) -> dict:
+        """Εισαγωγή ασκήσεων στο τέλος της ενότητας `key` ή, με `at={"side": "after"|"before", "el": <παράγραφος
+        αρχής υπάρχουσας άσκησης>}`, ακριβώς πριν/μετά από εκείνη την άσκηση (στη δική της ενότητα και αρίθμηση)."""
         if not exercises:
             raise CorpusError("Δεν υπάρχουν ασκήσεις για εισαγωγή.")
-        h, end = self._find(key)
+        if at is not None:
+            blk = self._block_of(at["el"])
+            h = next(x for x in self.headings() if x["index"] == blk["head"])
+            end = blk["sec_end"]
+        else:
+            h, end = self._find(key)
         start = h["index"] + 1
         ex_num = self._exercise_num(start, end, h["num_id"])
-        donor, donor_num = self._donor(h, start, end, ex_num)
+        if at is not None:
+            donor, donor_num = at["el"], ex_num  # η μορφή της γειτονικής άσκησης
+        else:
+            donor, donor_num = self._donor(h, start, end, ex_num)
         warnings: list[str] = []
         if not ex_num:
             ex_num = self._new_numbering(donor_num, h["label"])
         src_ppr = donor.find("w:pPr", NS) if donor is not None else None
         donor_ppr = copy.deepcopy(src_ppr) if src_ppr is not None else etree.Element(_w("pPr"))
+        # εσοχή της «δότριας» άσκησης στο επίπεδο 0 (π.χ. left=709), ώστε η νέα να στοιχίζεται με τις γειτονικές
+        dnp = self.numpr(donor) if donor is not None else None
+        dind = src_ppr.find("w:ind", NS) if src_ppr is not None else None
+        self._donor_ind0 = copy.deepcopy(dind) if (dnp and dnp[1] == 0 and dind is not None) else None
         for local in ("outlineLvl", "pageBreakBefore", "sectPr", "pPrChange", "keepNext", "framePr"):
             for x in donor_ppr.findall(f"w:{local}", NS):
                 donor_ppr.remove(x)
@@ -924,23 +954,32 @@ class CorpusDoc:
             el = self.body[j]
             if etree.QName(el).localname == "p" and not self.has_content(el):
                 np_ = self.numpr(el)
-                if np_ and np_[0] == ex_num:
+                if np_ and np_[0] == ex_num and not self._ex_start(j, ex_num):
                     self.body.remove(el)
                     removed += 1
         end -= removed
 
-        # 2. σημείο εισαγωγής: μετά το τελευταίο περιεχόμενο της ενότητας
-        last = None
-        for j in range(start, end):
-            if self.has_content(self.body[j]):
-                last = j
-        if last is not None:
-            anchor, lead_sep = last, True
+        # 2. σημείο εισαγωγής
+        if at is not None:
+            # πριν/μετά από συγκεκριμένη άσκηση: η νέα παίρνει τη θέση της στη σειρά της αρίθμησης
+            if at["side"] == "before":
+                anchor = list(self.body).index(at["el"]) - 1
+            else:
+                anchor = self._block_take_end(self._block_of(at["el"])) - 1
+            lead_sep = not self._plain_empty(self.body[anchor]) and self.outline_level(self.body[anchor]) is None
         else:
-            first = self.body[start] if start < end else None
-            empty_first = (first is not None and etree.QName(first).localname == "p"
-                           and not self.has_content(first) and self.numpr(first) is None)
-            anchor, lead_sep = (start if empty_first else h["index"]), False
+            # μετά το τελευταίο περιεχόμενο της ενότητας
+            last = None
+            for j in range(start, end):
+                if self.has_content(self.body[j]):
+                    last = j
+            if last is not None:
+                anchor, lead_sep = last, True
+            else:
+                first = self.body[start] if start < end else None
+                empty_first = (first is not None and etree.QName(first).localname == "p"
+                               and not self.has_content(first) and self.numpr(first) is None)
+                anchor, lead_sep = (start if empty_first else h["index"]), False
         after = self.body[anchor + 1] if anchor + 1 < len(self.body) else None
         trail_sep = not (after is not None and etree.QName(after).localname == "p"
                          and not self.has_content(after) and self.numpr(after) is None
@@ -997,12 +1036,17 @@ class CorpusDoc:
         for x in ppr.findall("w:ind", NS):
             ppr.remove(x)
         level = max(0, block.level)
+        dind0 = getattr(self, "_donor_ind0", None)
         if kind == "num":
             np_ = etree.SubElement(ppr, _w("numPr"))
             etree.SubElement(np_, _w("ilvl")).set(_w("val"), str(level))
             etree.SubElement(np_, _w("numId")).set(_w("val"), ex_num)
+            if level == 0 and dind0 is not None:
+                ppr.append(copy.deepcopy(dind0))
         elif kind != "sep":
             left = self.level_left(ex_num, level)
+            if level == 0 and dind0 is not None and (dind0.get(_w("left")) or dind0.get(_w("start"))):
+                left = int(dind0.get(_w("left")) or dind0.get(_w("start")))
             if left is not None:
                 ind = etree.SubElement(ppr, _w("ind"))
                 ind.set(_w("left"), str(left))
@@ -1082,6 +1126,174 @@ class CorpusDoc:
                 sb.set(R + "embed", srid)
         return p
 
+    # ----------------------------------------------------------------- ασκήσεις ως μπλοκ
+    def exercise_blocks(self) -> list[dict]:
+        """Οι ασκήσεις του εγγράφου με τη σειρά: για καθεμία οι θέσεις [start, end) στο σώμα (ως την επόμενη
+        άσκηση ή τον επόμενο τίτλο), ο αριθμός της (π.χ. «4.32»), η ενότητα και η αρίθμηση (numId)."""
+        hs = self.headings()
+        labels = {idx: lab for idx, _el, lab in self._walk_labels()}
+        out: list[dict] = []
+        for i, h in enumerate(hs):
+            end = hs[i + 1]["index"] if i + 1 < len(hs) else self._end_index()
+            ex_num = self._exercise_num(h["index"] + 1, end, h["num_id"])
+            if not ex_num:
+                continue
+            section = (h["label"] + " " if h["label"] else "") + h["title"]
+            starts = []
+            for j in range(h["index"] + 1, end):
+                if self._ex_start(j, ex_num):
+                    starts.append(j)
+            for k, st in enumerate(starts):
+                out.append({"start": st, "end": starts[k + 1] if k + 1 < len(starts) else end,
+                            "label": labels.get(st, "").strip(), "section": section, "ex_num": ex_num,
+                            "head": h["index"], "sec_end": end, "el": self.body[st]})
+        return out
+
+    def _block_of(self, el) -> dict:
+        for b in self.exercise_blocks():
+            if b["el"] is el:
+                return b
+        raise CorpusError("Η άσκηση-σημείο αναφοράς δεν βρέθηκε στο έγγραφο.")
+
+    def _plain_empty(self, el) -> bool:
+        """Κενή παράγραφος-διαχωριστικό: χωρίς περιεχόμενο, αρίθμηση, τίτλο, αλλαγή σελίδας ή ενότητας."""
+        if el is None or etree.QName(el).localname != "p" or self.has_content(el):
+            return False
+        if self.numpr(el) is not None or self.outline_level(el) is not None:
+            return False
+        if el.find("w:pPr/w:sectPr", NS) is not None or el.find("w:pPr/w:pageBreakBefore", NS) is not None:
+            return False
+        return not any(br.get(_w("type")) == "page" for br in el.iter(_w("br")))
+
+    def _block_take_end(self, b: dict) -> int:
+        """Τέλος (αποκλειστικό) του περιεχομένου μιας άσκησης: ως το τελευταίο στοιχείο με περιεχόμενο και το πολύ
+        μία κενή παράγραφο-διαχωριστικό μετά. Ό,τι ακολουθεί (π.χ. αλλαγή σελίδας πριν από νέο τίτλο) μένει στη θέση του."""
+        last = b["start"]
+        for j in range(b["start"], b["end"]):
+            if self.has_content(self.body[j]):
+                last = j
+        t = last + 1
+        if t < b["end"] and self._plain_empty(self.body[t]):
+            t += 1
+        return t
+
+    def _separator_like(self, near) -> etree._Element:
+        """Νέα κενή παράγραφος-διαχωριστικό, αντίγραφο ενός υπάρχοντος διαχωριστικού της περιοχής."""
+        el = near
+        for _ in range(40):
+            if el is None:
+                break
+            if self._plain_empty(el):
+                sep = copy.deepcopy(el)
+                for k in list(sep.attrib):
+                    if k.startswith("{http://schemas.microsoft.com/office/word/2010/wordml}"):
+                        del sep.attrib[k]
+                return sep
+            el = el.getprevious()
+        return etree.Element(_w("p"))
+
+    def _set_numid(self, p, num_id: str, ilvl: int) -> None:
+        ppr = p.find("w:pPr", NS)
+        if ppr is None:
+            ppr = etree.Element(_w("pPr"))
+            p.insert(0, ppr)
+        np_ = ppr.find("w:numPr", NS)
+        if np_ is None:
+            np_ = etree.SubElement(ppr, _w("numPr"))
+        for x in list(np_):
+            np_.remove(x)
+        etree.SubElement(np_, _w("ilvl")).set(_w("val"), str(ilvl))
+        etree.SubElement(np_, _w("numId")).set(_w("val"), num_id)
+        _sort_children(ppr, _PPR_ORDER)
+
+    def move_exercise(self, src_i: int, anchor_i: int, side: str) -> dict:
+        """Μετακίνηση της άσκησης `src_i` (δείκτης στη λίστα `exercise_blocks`) πριν/μετά από την `anchor_i`.
+        Η άσκηση παίρνει την αρίθμηση της ενότητας-προορισμού· οι αριθμοί όλων των ασκήσεων ξαναϋπολογίζονται
+        από το Word (αυτόματη αρίθμηση), οπότε μένουν συνεχόμενοι."""
+        if side not in ("before", "after"):
+            raise CorpusError("Άγνωστη θέση.")
+        blocks = self.exercise_blocks()
+        if not (0 <= src_i < len(blocks) and 0 <= anchor_i < len(blocks)):
+            raise CorpusError("Η άσκηση δεν βρέθηκε στο έγγραφο.")
+        if src_i == anchor_i:
+            raise CorpusError("Μια άσκηση δεν μπορεί να μπει δίπλα στον εαυτό της.")
+        src, anc = blocks[src_i], blocks[anchor_i]
+        same = src["section"] == anc["section"]
+        if same and ((side == "after" and src_i == anchor_i + 1) or (side == "before" and src_i == anchor_i - 1)):
+            raise CorpusError(f"Η {src['label']} είναι ήδη {'μετά από' if side == 'after' else 'πριν από'} την {anc['label']}.")
+        take_end = self._block_take_end(src)
+        els = [self.body[j] for j in range(src["start"], take_end)]
+        for el in els:
+            if etree.QName(el).localname == "p" and (el.find("w:pPr/w:sectPr", NS) is not None
+                                                      or self.outline_level(el) is not None):
+                raise CorpusError(f"Η {src['label']} περιέχει αλλαγή ενότητας ή τίτλο και δεν μετακινείται αυτόματα.")
+        # σημείο-στόχος: το στοιχείο πριν από το οποίο θα μπει η άσκηση
+        if side == "before":
+            target = anc["el"]
+        else:
+            t = self._block_take_end(anc)
+            target = self.body[t] if t < len(self.body) else None
+        if target is not None and any(target is e for e in els):
+            raise CorpusError(f"Η {src['label']} είναι ήδη εκεί.")
+        orig_next = self.body[take_end] if take_end < len(self.body) else None
+        # σελιδοδείκτες που ανοίγουν/κλείνουν έξω από την άσκηση μένουν στη θέση τους
+        starts = {b.get(_w("id")): b for el in els for b in el.iter(_w("bookmarkStart"))}
+        ends = {b.get(_w("id")): b for el in els for b in el.iter(_w("bookmarkEnd"))}
+        loose = [m for k, m in starts.items() if k not in ends] + [m for k, m in ends.items() if k not in starts]
+        els = [e for e in els if not any(e is m for m in loose)]  # σελιδοδείκτης ως αυτόνομο στοιχείο: μένει
+        for m in loose:
+            if m.getparent() is self.body:
+                continue
+            m.getparent().remove(m)
+            if orig_next is not None:
+                orig_next.addprevious(m)
+        for el in els:
+            self.body.remove(el)
+        if target is None:
+            sect = self.body.find("w:sectPr", NS)
+            target = sect
+        for el in els:
+            if target is not None:
+                target.addprevious(el)
+            else:
+                self.body.append(el)
+        # διαχωριστικά: μία κενή παράγραφος πριν και μετά, όπως στις υπόλοιπες ασκήσεις
+        first, last = els[0], els[-1]
+        prev = first.getprevious()
+        if prev is not None and not self._plain_empty(prev) and self.outline_level(prev) is None:
+            first.addprevious(self._separator_like(prev))
+        nxt = last.getnext()
+        if (not self._plain_empty(last) and nxt is not None and etree.QName(nxt).localname in ("p", "tbl")
+                and not self._plain_empty(nxt)):
+            last.addnext(self._separator_like(first.getprevious()))
+        # αρίθμηση της ενότητας-προορισμού
+        if src["ex_num"] != anc["ex_num"]:
+            for el in els:
+                for p in ([el] if etree.QName(el).localname == "p" else list(el.iter(_w("p")))):
+                    np_ = self.numpr(p)
+                    if np_ and np_[0] == src["ex_num"]:
+                        self._set_numid(p, anc["ex_num"], np_[1])
+        self.changed.add("word/document.xml")
+        return {"moved": src["label"], "anchor": anc["label"], "side": side, "el": src["el"]}
+
+    # ----------------------------------------------------------------- έλεγχοι ακεραιότητας
+    def snapshot(self) -> dict:
+        """Ό,τι πρέπει να μείνει ίδιο μετά από μια αλλαγή: τίτλοι, εξισώσεις, εικόνες, πίνακες, ασκήσεις."""
+        from .duplicates import doc_exercises
+
+        exs = doc_exercises(self)["exercises"]
+        return {
+            "headings": [(h["label"], h["title"]) for h in self.headings()],
+            "objects": sum(1 for _ in self.doc.iter(_w("object"))),
+            "omml": sum(1 for _ in self.doc.iter(M + "oMath")),
+            "drawings": sum(1 for _ in self.doc.iter(_w("drawing"))) + sum(1 for _ in self.doc.iter(_w("pict"))),
+            "tables": sum(1 for _ in self.doc.iter(_w("tbl"))),
+            "exercises": exs,
+            "issues": numbering_issues(exs),
+            # κλειδί το ίδιο το στοιχείο (κρατιέται ζωντανό, άρα σταθερό)· ΟΧΙ id(): τα proxies του lxml ανακυκλώνονται
+            "labels": {b["el"]: b["label"] for b in self.exercise_blocks()},
+        }
+
     # ----------------------------------------------------------------- αποθήκευση
     def save(self, out_path: str | Path) -> Path:
         out_path = Path(out_path)
@@ -1114,7 +1326,167 @@ class CorpusDoc:
         return out_path
 
 
+# --------------------------------------------------------------------------- αρίθμηση: έλεγχοι και σύνοψη
+
+_LABEL_RE = re.compile(r"^(.*?)(\d+)\.?$")
+
+
+def numbering_issues(exs: list[dict]) -> list[str]:
+    """Κενά ή επαναλήψεις στην αρίθμηση ανά ενότητα (π.χ. «4.12 → 4.14»)."""
+    issues: list[str] = []
+    prev: dict[str, tuple[str, int, str]] = {}
+    for e in exs:
+        m = _LABEL_RE.match(e.get("label") or "")
+        if not m:
+            continue
+        pre, n = m.group(1), int(m.group(2))
+        p = prev.get(e["section"])
+        if p is not None and (pre != p[0] or n != p[1] + 1):
+            issues.append(f"{e['section']}: μετά την {p[2]} ακολουθεί η {e['label']}")
+        prev[e["section"]] = (pre, n, e["label"])
+    return issues
+
+
+def renumber_summary(before: dict, blocks: list[dict], skip: set) -> list[str]:
+    """Σύνοψη αλλαγών αριθμών: «4.52–4.78 → 4.53–4.79» (σε συνεχόμενες ομάδες)."""
+    rows = [(before[b["el"]], b["label"], b["section"]) for b in blocks
+            if b["el"] in before and b["el"] not in skip and before[b["el"]] != b["label"]]
+
+    def num(lab):
+        m = _LABEL_RE.match(lab or "")
+        return int(m.group(2)) if m else None
+
+    out, run = [], []
+
+    def flush():
+        if run:
+            a, b = run[0], run[-1]
+            out.append(f"{a[0]} → {a[1]}" if len(run) == 1 else f"{a[0]}–{b[0]} → {a[1]}–{b[1]} ({len(run)} ασκήσεις)")
+
+    for r in rows:
+        if run and r[2] == run[-1][2] and num(r[0]) is not None and num(run[-1][0]) is not None \
+                and num(r[0]) == num(run[-1][0]) + 1 and num(r[1]) == num(run[-1][1]) + 1:
+            run.append(r)
+        else:
+            flush()
+            run = [r]
+    flush()
+    return out
+
+
+_REF_RE = re.compile(r"(?<![\d.,])(\d{1,2}\.\d{1,3})(?![\d]|[.,]\d)")
+
+
+def reference_warnings(exs: list[dict], changed: dict[str, str]) -> list[str]:
+    """Ασκήσεις που γράφουν στο κείμενό τους αριθμό άλλης άσκησης που άλλαξε (π.χ. «όπως στην 4.33»)."""
+    out = []
+    for e in exs:
+        text = " ".join(p["md"] for p in e["parts"])
+        text = re.sub(r"\$[^$]*\$", " ", text)
+        for ref in sorted(set(_REF_RE.findall(text))):
+            if ref in changed and ref != e["label"]:
+                out.append(f"Η άσκηση {e['label']} γράφει «{ref}»· η άσκηση που ήταν {ref} είναι τώρα η {changed[ref]}. "
+                           "Ελέγξτε αν πρόκειται για παραπομπή και διορθώστε τη στο Word.")
+    return out
+
+
+def _verify(before: dict, after: dict, extra: int) -> list[str]:
+    """Έλεγχοι ακεραιότητας μετά από αλλαγή. Επιστρέφει τα προβλήματα (κενή λίστα = όλα σωστά)."""
+    from collections import Counter
+
+    errs = []
+    if before["headings"] != after["headings"]:
+        errs.append("άλλαξαν οι τίτλοι κεφαλαίων/ενοτήτων")
+    if after["objects"] != before["objects"]:
+        errs.append(f"εξισώσεις MathType: {before['objects']} → {after['objects']}")
+    if after["omml"] < before["omml"] or after["drawings"] < before["drawings"] or after["tables"] < before["tables"]:
+        errs.append("χάθηκαν εξισώσεις, εικόνες ή πίνακες")
+    if len(after["exercises"]) != len(before["exercises"]) + extra:
+        errs.append(f"πλήθος ασκήσεων: {len(before['exercises'])} → {len(after['exercises'])} (αναμενόταν "
+                    f"{len(before['exercises']) + extra})")
+    missing = Counter(e["fp"] for e in before["exercises"]) - Counter(e["fp"] for e in after["exercises"])
+    if missing:
+        errs.append(f"{sum(missing.values())} ασκήσεις δεν βρέθηκαν ίδιες μετά την αλλαγή")
+    if len(after["issues"]) > len(before["issues"]):
+        errs.append("η αρίθμηση έπαψε να είναι συνεχόμενη: " + "; ".join(i for i in after["issues"] if i not in before["issues"]))
+    return errs
+
+
 # --------------------------------------------------------------------------- υψηλού επιπέδου
+
+def _resolve(exs: list[dict], ref: dict) -> int:
+    """Άσκηση από {fp, label}: πρώτα με το περιεχόμενο (fp), μετά με τον αριθμό."""
+    cands = [i for i, e in enumerate(exs) if e["fp"] == ref.get("fp")]
+    if len(cands) > 1:
+        lab = [i for i in cands if exs[i]["label"] == ref.get("label")]
+        cands = lab or cands
+    if not cands:
+        raise CorpusError(f"Η άσκηση {ref.get('label') or ''} δεν βρέθηκε όπως ήταν — ίσως άλλαξε το αρχείο στο Word. "
+                          "Πατήστε «↻ Ανανέωση» και ξαναδοκιμάστε.")
+    return cands[0]
+
+
+def move_in(path: str | Path, src: dict, anchor: dict, side: str, make_backup: bool = True) -> dict:
+    """Μετακίνηση άσκησης μέσα στο αρχείο, με ελέγχους ακεραιότητας πριν από την αποθήκευση."""
+    path = Path(path)
+    doc = CorpusDoc(path)
+    before = doc.snapshot()
+    si, ai = _resolve(before["exercises"], src), _resolve(before["exercises"], anchor)
+    anchor_el = doc.exercise_blocks()[ai]["el"]
+    info = doc.move_exercise(si, ai, side)
+    after = doc.snapshot()
+    errs = _verify(before, after, 0)
+    blocks = doc.exercise_blocks()
+    pos = {id(b["el"]): k for k, b in enumerate(blocks)}
+    moved_new = pos.get(id(info["el"]))
+    if moved_new is None or id(anchor_el) not in pos or pos[id(anchor_el)] + (1 if side == "after" else -1) != moved_new:
+        errs.append("η άσκηση δεν βρέθηκε στη νέα θέση")
+    if errs:
+        raise CorpusError("Η μετακίνηση ακυρώθηκε γιατί δεν πέρασε τους ελέγχους ασφαλείας: " + "; ".join(errs)
+                          + ". Το αρχείο σας δεν άλλαξε.")
+    new_label = blocks[moved_new]["label"]
+    changed = {before["labels"][b["el"]]: b["label"] for b in blocks
+               if b["el"] in before["labels"] and before["labels"][b["el"]] != b["label"]}
+    result = {"moved_from": info["moved"], "moved_to": new_label, "anchor": blocks[pos[id(anchor_el)]]["label"],
+              "side": side, "section": blocks[moved_new]["section"],
+              "renumbered": renumber_summary(before["labels"], blocks, {info["el"]}),
+              "warnings": reference_warnings(after["exercises"], changed),
+              "checks": _checks_text(after, before)}
+    if make_backup:
+        result["backup"] = str(backup(path))
+    doc.save(path)
+    result["path"] = str(path)
+    result["sha"] = file_sha(path)
+    return result
+
+
+def _checks_text(after: dict, before: dict) -> list[str]:
+    return [f"Τίτλοι κεφαλαίων/ενοτήτων: ίδιοι ({len(after['headings'])})",
+            f"Ασκήσεις: {len(before['exercises'])} → {len(after['exercises'])}, όλες με το ίδιο περιεχόμενο",
+            f"Εξισώσεις MathType: {after['objects']} (ίδιες) · εξισώσεις Word: {before['omml']} → {after['omml']}",
+            f"Εικόνες/σχήματα: {before['drawings']} → {after['drawings']} · πίνακες: {before['tables']} → {after['tables']}",
+            "Αρίθμηση: συνεχόμενη σε όλες τις ενότητες" if not after["issues"]
+            else f"Αρίθμηση: {len(after['issues'])} σημεία που ήταν ήδη ασυνεχή πριν από την αλλαγή (δεν προστέθηκε κανένα)"]
+
+
+def file_sha(path: str | Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def undo_change(path: str | Path, backup_path: str | Path, sha: str) -> dict:
+    """Επαναφορά του αντιγράφου ασφαλείας — μόνο αν το αρχείο δεν άλλαξε από τότε (π.χ. στο Word)."""
+    path, backup_path = Path(path), Path(backup_path)
+    if not backup_path.exists():
+        raise CorpusError("Δεν βρέθηκε το αντίγραφο ασφαλείας.")
+    if file_sha(path) != sha:
+        raise CorpusError("Το αρχείο άλλαξε από τότε (π.χ. στο Word), οπότε η αναίρεση δεν γίνεται αυτόματα. "
+                          f"Το προηγούμενο αρχείο υπάρχει στο «{backup_path}».")
+    fresh = backup(path)  # και η κατάσταση πριν από την αναίρεση κρατιέται
+    shutil.copy2(backup_path, path)
+    return {"restored": str(backup_path), "backup": str(fresh)}
+
 
 def backup(path: Path, keep: int = 15) -> Path:
     """Αντίγραφο ασφαλείας πριν από κάθε αλλαγή: «Αντίγραφα ασφαλείας/όνομα - ΗΗΜΜ-ωωλλ.docx»."""
@@ -1122,7 +1494,12 @@ def backup(path: Path, keep: int = 15) -> Path:
 
     folder = path.parent / "Αντίγραφα ασφαλείας"
     folder.mkdir(exist_ok=True)
-    dst = folder / f"{path.stem} - {datetime.now():%Y%m%d-%H%M%S}{path.suffix}"
+    stamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    dst = folder / f"{path.stem} - {stamp}{path.suffix}"
+    k = 2
+    while dst.exists():  # δύο αλλαγές στο ίδιο δευτερόλεπτο (π.χ. αλλαγή και αναίρεση): ποτέ αντικατάσταση
+        dst = folder / f"{path.stem} - {stamp}-{k}{path.suffix}"
+        k += 1
     shutil.copy2(path, dst)
     olds = sorted(folder.glob(f"{glob_escape(path.stem)} - *{path.suffix}"))
     for old in olds[:-keep]:
@@ -1139,14 +1516,57 @@ def glob_escape(s: str) -> str:
 
 def insert_into(path: str | Path, key: dict, exercises: list[dict], workdir: Path, out_path: str | Path | None = None,
                 math_font: str = "Cambria Math", make_backup: bool = True) -> dict:
+    """Εισαγωγή ασκήσεων. Κάθε άσκηση μπορεί να έχει `place`: {"side": "after"|"before", "fp", "label"} — τότε
+    μπαίνει δίπλα στη συγκεκριμένη άσκηση του εγγράφου· αλλιώς στο τέλος της ενότητας `key`.
+    Πριν από την αποθήκευση γίνονται έλεγχοι ακεραιότητας (τίτλοι, εξισώσεις, παλιές ασκήσεις, αρίθμηση)."""
     path = Path(path)
     doc = CorpusDoc(path)
-    info = doc.insert(key, exercises, workdir, math_font=math_font)
+    before = doc.snapshot()
+    blocks0 = doc.exercise_blocks()
+    # ομάδες με την ίδια θέση, με τη σειρά που εμφανίζονται (ίδια θέση = συνεχόμενες, με τη σειρά της οθόνης)
+    groups: list[tuple[tuple, list[dict]]] = []
+    for ex in exercises:
+        pl = ex.get("place") or None
+        k = ("end",) if not pl else (pl.get("side"), pl.get("fp"), pl.get("label"))
+        for gk, lst in groups:
+            if gk == k:
+                lst.append(ex)
+                break
+        else:
+            groups.append((k, [ex]))
+    infos, warnings, removed = [], [], 0
+    for gk, lst in groups:
+        at = None
+        if gk[0] != "end":
+            i = _resolve(before["exercises"], {"fp": gk[1], "label": gk[2]})
+            at = {"side": gk[0], "el": blocks0[i]["el"]}
+        sub = [{k: v for k, v in e.items() if k != "place"} for e in lst]
+        inf = doc.insert(key, sub, workdir, math_font=math_font, at=at)
+        inf["place"] = None if at is None else {"side": gk[0], "label": gk[2]}
+        infos.append(inf)
+        warnings += inf.get("warnings", [])
+        removed += inf.get("removed_placeholders", 0)
+    after = doc.snapshot()
+    errs = _verify(before, after, len(exercises))
+    if errs:
+        raise CorpusError("Η εισαγωγή ακυρώθηκε γιατί δεν πέρασε τους ελέγχους ασφαλείας: " + "; ".join(errs)
+                          + ". Το αρχείο σας δεν άλλαξε.")
+    blocks = doc.exercise_blocks()
+    new_labels = [b["label"] for b in blocks if b["el"] not in before["labels"]]
+    changed = {before["labels"][b["el"]]: b["label"] for b in blocks
+               if b["el"] in before["labels"] and before["labels"][b["el"]] != b["label"]}
+    info = {"inserted": len(exercises), "section": infos[0]["section"], "section_label": infos[0]["section_label"],
+            "first_label": infos[0]["first_label"], "last_label": infos[-1]["last_label"],
+            "labels": new_labels, "groups": [{"place": x["place"], "first_label": x["first_label"],
+                                              "last_label": x["last_label"], "section": x["section"]} for x in infos],
+            "removed_placeholders": removed, "warnings": warnings + reference_warnings(after["exercises"], changed),
+            "renumbered": renumber_summary(before["labels"], blocks, set()), "checks": _checks_text(after, before)}
     target = Path(out_path) if out_path else path
     if make_backup and target == path:
         info["backup"] = str(backup(path))
     doc.save(target)
     info["path"] = str(target)
+    info["sha"] = file_sha(target)
     return info
 
 

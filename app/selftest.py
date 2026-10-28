@@ -159,6 +159,44 @@ def run(report_path: str | None = None) -> int:
 
     check("corpus", corpus)
 
+    def duplicates():
+        import olefile  # noqa: F401  — χρειάζεται για τις εξισώσεις MathType
+
+        from .corpus_doc import insert_into, move_in, sample_document
+        from .duplicates import audit
+        from .duplicates import check as dup_check
+        from .duplicates import index_of
+        from .mathtype import mtef_to_latex
+
+        frac = (b"\x05\x01\x00\x06\x08DSMT6\x00\x00\x01\x00\x03\x00\x0b\x00\x00\x01\x00\x02\x00\x881\x00\x00"
+                b"\x01\x00\x02\x00\x882\x00\x00\x00\x00\x00")
+        tex = mtef_to_latex(frac)
+        if tex != r"\frac{1}{2}":
+            raise RuntimeError(f"MathType: {tex!r}")
+        ex = {"stem": "Δίνονται τα σημεία $Α(1,2)$ και $Β(3,5)$. Να βρείτε την εξίσωση της ευθείας $ΑΒ$.",
+              "closing": "", "figure": None, "items": []}
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            doc = sample_document(tdp / "corpus.docx", tdp)
+            insert_into(doc, {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, [ex], tdp, make_backup=False)
+            res = dup_check([ex], index_of(doc)["exercises"], "normal")
+            if not res[0] or res[0][0]["level"] != "same":
+                raise RuntimeError(f"δεν βρέθηκε η ίδια άσκηση: {res}")
+            insert_into(doc, {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, [ex], tdp, make_backup=False)
+            pairs = audit(index_of(doc)["exercises"], None, "normal")["pairs"]
+            if not pairs or pairs[0]["level"] != "same":
+                raise RuntimeError(f"ο έλεγχος όλου του αρχείου δεν βρήκε το ζεύγος: {pairs}")
+            other = dict(ex, stem="Να βρείτε την απόσταση του σημείου $Μ(3,4)$ από την ευθεία $3x+4y-5=0$.")
+            insert_into(doc, {"title": "ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ", "nth": 0}, [other], tdp, make_backup=False)
+            exs = index_of(doc)["exercises"]
+            res = move_in(doc, exs[2], exs[0], "after", make_backup=False)
+            labels = [e["label"] for e in index_of(doc)["exercises"]]
+            if (res["moved_from"], res["moved_to"]) != ("3.", "2.") or labels != ["1.", "2.", "3."]:
+                raise RuntimeError(f"λάθος μετακίνηση: {res}, {labels}")
+        return "MathType OK, εξισώσεις Word OK, ίδια άσκηση εντοπίστηκε, έλεγχος όλου του αρχείου OK, μετακίνηση OK"
+
+    check("duplicates", duplicates)
+
     def phone():
         import urllib.request
 

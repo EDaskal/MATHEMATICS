@@ -331,3 +331,78 @@ body.mode-corpus .steps { visibility: hidden; }
 #phone .path { font-family: Consolas, monospace; font-size: 12px; background: var(--code-bg); padding: 6px 8px; border-radius: 6px; word-break: break-all; margin: 4px 0 8px; user-select: all; }
 @media (max-width: 720px) { .phone-grid { grid-template-columns: 1fr; } }
 .coltab { display: inline-block; width: 3.5em; border-bottom: 1px dotted var(--line); margin: 0 4px; vertical-align: middle; }
+
+/* ------------------------------------------------ έλεγχος ίδιων ασκήσεων */
+.dup-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 10px; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--subtle); }
+.dup-bar select { margin-left: 4px; }
+.dup-status { font-size: 13px; }
+.dup-status .spinner { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 6px; }
+.dup-status b.same { color: var(--warn); }
+.dup-status b.warn { color: var(--amber); }
+.ex.dup-same { border-color: var(--warn); box-shadow: inset 4px 0 0 var(--warn); }
+.ex.dup-part, .ex.dup-numbers { box-shadow: inset 4px 0 0 var(--amber); }
+.ex.dup-similar { box-shadow: inset 4px 0 0 var(--line); }
+.dup-badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.dup-badge.same { background: var(--warn-soft); color: var(--warn); }
+.dup-badge.part, .dup-badge.numbers { background: var(--amber-soft); color: var(--amber); }
+.dup-badge.similar { background: var(--hover); color: var(--muted); }
+.dup-box { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; display: flex; flex-direction: column; gap: 6px; }
+.dup-box.same { background: var(--warn-soft); border-color: var(--warn); }
+.dup-box.part, .dup-box.numbers { background: var(--amber-soft); border-color: var(--amber-soft); }
+.dup-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.dup-row .dot { font-size: 14px; }
+.dup-row .btn { margin-left: auto; }
+.modal-body.wide { width: min(1100px, 96vw); }
+.dup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-height: 58vh; overflow: auto; }
+.dup-col { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--card); min-width: 0; }
+.dup-col-head { font-weight: 600; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.dup-ex .dp { display: flex; gap: 6px; margin: 4px 0; }
+.dup-ex .dp .lab { font-weight: 700; min-width: 2.2em; }
+.dup-ex .dp.l1 { padding-left: 1.6em; }
+.dup-ex .dp.l2 { padding-left: 3.2em; }
+.dup-ex .dp p { margin: 0; }
+#dup-diffs { margin-top: 10px; font-size: 13px; }
+#dup-diffs table { border-collapse: collapse; width: 100%; }
+#dup-diffs td, #dup-diffs th { border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+#dup-diffs td.old { color: var(--warn); }
+#dup-diffs td.new { color: var(--ok); }
+@media (max-width: 760px) { .dup-grid { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------ έλεγχος ολόκληρου αρχείου */
+#c-audit-bar { margin-top: 10px; }
+.audit-filters select { max-width: 320px; }
+.audit-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.audit-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 10px; font-size: 13px; background: var(--card); }
+.audit-row.same { border-left: 4px solid var(--warn); }
+.audit-row.numbers, .audit-row.part { border-left: 4px solid var(--amber); }
+.audit-row.similar { border-left: 4px solid var(--line); }
+.audit-row .apair { flex: 1; min-width: 260px; }
+.audit-row .where { color: var(--muted); }
+.audit-row .tag { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+
+/* ------------------------------------------------ θέση / μετακίνηση ασκήσεων */
+.place-btn { font-size: 12px; padding: 3px 9px; }
+.place-btn.set { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.place-modes { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.place-modes label, #place-what .what-opt { display: flex !important; flex-direction: row !important; align-items: center;
+  justify-content: flex-start; gap: 8px; cursor: pointer; text-align: left; margin: 0; }
+.place-modes input[type="radio"], #place-what input[type="radio"] { width: auto; margin: 0; flex: none; }
+#place-what { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+#place-what select { width: 100%; }
+#place-what .what-opt { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+#place-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+#place-pick input { width: 100%; margin-bottom: 6px; }
+#place-anchor { width: 100%; font-size: 13px; }
+#place-anchor optgroup { font-style: normal; color: var(--muted); }
+.place-preview { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--subtle); border: 1px solid var(--line);
+  font-size: 13px; min-height: 1.5em; }
+.place-preview ul, .plan-note ul, .move-res ul { margin: 4px 0 0 18px; padding: 0; }
+.plan-note { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--ink); font-size: 13px; }
+.move-res { margin: 10px 0; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--ok); background: var(--ok-soft); font-size: 13px; }
+.move-res.err { border-color: var(--warn); background: var(--warn-soft); }
+.move-res details { margin-top: 6px; }
+.dup-row .btn.small.ghost { margin-left: 0; }
+.place-modes label[hidden] { display: none !important; }
+#c-audit-numbering { flex-basis: 100%; }
