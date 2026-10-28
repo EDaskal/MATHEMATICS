@@ -1771,6 +1771,18 @@ function corpusGroups() {
   return groups;
 }
 
+/** Ομάδες ως διαστήματα [αρχή, τέλος): σελίδες δεμένες με «Συνέχεια» (ίδια άσκηση σε πολλές σελίδες). */
+function corpusGroupRanges() {
+  const imgs = S.corpus.images;
+  if (imgs[0]) imgs[0].join = false;  // η πρώτη εικόνα δεν μπορεί να είναι «συνέχεια»
+  const out = [];
+  imgs.forEach((im, i) => {
+    if (i > 0 && im.join && out.length) out[out.length - 1][1] = i + 1;
+    else out.push([i, i + 1]);
+  });
+  return out;
+}
+
 function corpusMarkChanged(im) {
   // αλλαγή σε ομάδα που είχε μεταγραφεί: οι ασκήσεις της αφαιρούνται και ξαναδιαβάζονται
   const job = Object.values(S.corpus.jobs).find((j) => j.imageIds.includes(im.id));
@@ -1791,20 +1803,29 @@ function renderCorpusImages() {
   const box = $("#c-thumbs");
   box.innerHTML = "";
   const badge = { new: ["", "νέα"], pending: ["run", "διαβάζεται…"], done: ["ok", "έτοιμη"], error: ["err", "σφάλμα"] };
+  const ranges = corpusGroupRanges();
+  const groupOf = [];
+  ranges.forEach((r, g) => { for (let k = r[0]; k < r[1]; k++) groupOf[k] = g; });
   C.images.forEach((im, i) => {
+    const g = groupOf[i], [gs, ge] = ranges[g], size = ge - gs;
+    const what = size > 1 ? `όλη την ομάδα (${size} σελίδες)` : "την εικόνα";
     const b = badge[im.status] || badge.new;
     const job = Object.values(C.jobs).find((j) => j.imageIds[0] === im.id);
     const nEx = job ? C.exs.filter((x) => x.jobId === job.id).length : 0;
-    box.append(el("div", { class: "cthumb" + (im.join ? " joined" : "") },
+    box.append(el("div", { class: "cthumb" + (im.join ? " joined" : "") + (size > 1 ? " grp" : "") + (size > 1 && i === gs ? " grp-first" : "") },
       el("img", { src: im.dataUrl, alt: "", onclick: () => lightbox(im.dataUrl) }),
+      size > 1 ? el("div", { class: "grp-tag", title: "Σελίδες δεμένες με «Συνέχεια»: διαβάζονται μαζί και μετακινούνται μαζί",
+        text: `🔗 Ομάδα · σελ. ${i - gs + 1}/${size}` }) : null,
       el("div", { class: "nm", title: im.name, text: `${i + 1}. ${im.name}` }),
       el("div", { class: "tools" },
         el("span", { class: `badge ${b[0]}`, title: im.error || "", text: im.status === "done" && job ? `${nEx} ασκ.` : b[1] }),
         el("div", { class: "spacer" }),
         i > 0 ? el("button", { class: im.join ? "on" : "", title: "Η εικόνα είναι συνέχεια (επόμενη σελίδα) της προηγούμενης", text: "⤒ Συνέχεια",
           onclick: () => { corpusMarkChanged(im); corpusMarkChanged(C.images[i - 1]); im.join = !im.join; renderCorpus(); } }) : null,
-        el("button", { title: "Πιο μπροστά", text: "◀", onclick: () => corpusMoveImage(i, -1) }),
-        el("button", { title: "Πιο πίσω", text: "▶", onclick: () => corpusMoveImage(i, 1) }),
+        el("button", { title: `Πιο μπροστά: μετακινεί ${what}· προσπερνά ολόκληρες τις ομάδες`, text: "◀", disabled: g === 0,
+          onclick: () => corpusMoveImage(i, -1) }),
+        el("button", { title: `Πιο πίσω: μετακινεί ${what}· προσπερνά ολόκληρες τις ομάδες`, text: "▶", disabled: g === ranges.length - 1,
+          onclick: () => corpusMoveImage(i, 1) }),
         el("button", { title: "Αφαίρεση", text: "✕", onclick: () => corpusRemoveImage(i) }))));
   });
   const n = C.images.length;
@@ -1814,13 +1835,21 @@ function renderCorpusImages() {
   $("#c-transcribe").disabled = !todo;
 }
 
+/** ◀ ▶: μετακινείται ολόκληρη η ομάδα της εικόνας (ή η μόνη εικόνα) κατά μία θέση ομάδας. Έτσι μια ομάδα
+ *  «Συνέχεια» μένει ενωμένη με την ίδια σειρά σελίδων, και ό,τι μετακινείται δίπλα της την προσπερνά ολόκληρη.
+ *  Οι ομάδες δεν αλλάζουν περιεχόμενο, άρα όσες έχουν ήδη διαβαστεί δεν χρειάζεται να ξαναδιαβαστούν. */
 function corpusMoveImage(i, d) {
   const imgs = S.corpus.images;
-  const j = i + d;
-  if (j < 0 || j >= imgs.length) return;
-  for (const im of [imgs[i], imgs[j]]) if (im.join || imgs[imgs.indexOf(im) + 1]?.join) corpusMarkChanged(im);
-  [imgs[i], imgs[j]] = [imgs[j], imgs[i]];
-  if (imgs[0]) imgs[0].join = false;
+  const ranges = corpusGroupRanges();
+  const g = ranges.findIndex(([s, e]) => i >= s && i < e);
+  const h = g + (d < 0 ? -1 : 1);
+  if (g < 0 || h < 0 || h >= ranges.length) return;
+  const [a, b] = d < 0 ? [ranges[h], ranges[g]] : [ranges[g], ranges[h]];  // a αμέσως πριν από b
+  const first = imgs.slice(a[0], a[1]);
+  const second = imgs.slice(b[0], b[1]);
+  imgs.splice(a[0], b[1] - a[0], ...second, ...first);
+  second[0].join = false;
+  first[0].join = false;
   corpusResort();
   renderCorpus();
 }
@@ -1831,18 +1860,24 @@ function corpusRemoveImage(i) {
   if (job && S.corpus.exs.some((x) => x.jobId === job.id) && !confirm("Να αφαιρεθεί η εικόνα και οι ασκήσεις που διαβάστηκαν από αυτήν;")) return;
   if (job) dropJob(job.id);
   S.corpus.images.splice(i, 1);
-  if (S.corpus.images[i]) S.corpus.images[i].join = S.corpus.images[i].join && i > 0;
+  // αν αφαιρέθηκε η πρώτη σελίδα μιας ομάδας, η επόμενη γίνεται η αρχή της (δεν κολλά στην προηγούμενη ομάδα)
+  if (S.corpus.images[i] && !im.join) S.corpus.images[i].join = false;
   if (S.corpus.images[0]) S.corpus.images[0].join = false;
   renderCorpus();
 }
 
+/** Ταξινόμηση με τις ομάδες «Συνέχεια» ενωμένες: ταξινομούνται οι ομάδες (με την πρώτη τους σελίδα)
+ *  και οι σελίδες κάθε ομάδας κρατούν τη σειρά τους. */
 function corpusSort(by) {
   const imgs = S.corpus.images;
-  if (imgs.some((im) => im.join) && !confirm("Η ταξινόμηση θα αφαιρέσει τις ενώσεις «Συνέχεια». Συνέχεια;")) return;
-  for (const im of imgs) { if (im.join) corpusMarkChanged(im); im.join = false; }
-  imgs.sort(by === "time" ? (a, b) => a.time - b.time || natCmp(a.name, b.name) : (a, b) => natCmp(a.name, b.name));
+  const cmp = by === "time" ? (a, b) => a.time - b.time || natCmp(a.name, b.name) : (a, b) => natCmp(a.name, b.name);
+  const groups = corpusGroupRanges().map(([s, e]) => imgs.slice(s, e));
+  groups.sort((x, y) => cmp(x[0], y[0]));
+  imgs.splice(0, imgs.length, ...groups.flat());
+  for (const grp of groups) grp[0].join = false;
   corpusResort();
   renderCorpus();
+  if (groups.some((grp) => grp.length > 1)) toast("Οι ομάδες «Συνέχεια» έμειναν ενωμένες, με την ίδια σειρά σελίδων.");
 }
 
 /** Οι ασκήσεις ακολουθούν τη σειρά των εικόνων (εκτός αν έχουν μετακινηθεί με το χέρι). */

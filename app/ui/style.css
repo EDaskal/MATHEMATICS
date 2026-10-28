@@ -477,3 +477,8 @@ body.mode-corpus .steps { visibility: hidden; }
 @media (max-width: 1439px) {
   .brand > span:not(.logo) { display: none; }
 }
+
+/* ---------- ομάδες «Συνέχεια» στο Corpus (1.7.3) */
+.cthumb.grp { background: var(--accent-soft); border-color: var(--accent); }
+.cthumb .grp-tag { font-size: 11px; font-weight: 600; color: var(--accent); }
+.cthumb .tools button:disabled { opacity: .35; cursor: default; }
