@@ -56,9 +56,14 @@ class Api:
         self._window = None
         self._events: "queue.Queue[dict]" = queue.Queue()
         self._images: dict[str, Path] = {}
+        self._pdfs: dict[str, dict] = {}  # pdf_id → {name, pages: [Path], total}
         self._session_dir = work_dir() / datetime.now().strftime("%Y%m%d-%H%M%S")
         self._session_dir.mkdir(parents=True, exist_ok=True)
         self._cleanup_old_sessions()
+        from .usage import tracker
+
+        tracker.on_change = lambda snap: self.emit("usage", self._usage_view(snap))
+        self._usage_refreshing = False
         # σάρωση γραμματοσειρών στο παρασκήνιο: οι Ρυθμίσεις ανοίγουν αμέσως με έτοιμη λίστα
         threading.Thread(target=self._warm_fonts, daemon=True).start()
 
@@ -86,7 +91,7 @@ class Api:
                 pass
         self._events.put(payload)
 
-    def _poll(self) -> list[dict]:
+    def poll_events(self) -> list[dict]:
         """Για τη λειτουργία browser: η οθόνη ρωτάει περιοδικά για νέα γεγονότα."""
         out = []
         while True:
@@ -119,6 +124,36 @@ class Api:
             "template_exists": (not s.template_path) or Path(s.template_path).exists(),
             "today": datetime.now().strftime("%d/%m/%Y"),
         }
+
+    # ------------------------------------------------------------ χρήση συνδρομής Claude (1.7.2)
+
+    def _usage_view(self, snap: dict | None = None) -> dict:
+        from .usage import tracker
+
+        snap = snap or tracker.snapshot()
+        return {**snap, "provider": self._settings.provider, "auto": bool(self._settings.usage_check),
+                "refreshing": bool(getattr(self, "_usage_refreshing", False))}
+
+    def usage_state(self) -> dict:
+        return self._usage_view()
+
+    def usage_refresh(self) -> dict:
+        """Ελάχιστη κλήση στη συνδρομή για φρέσκα όρια (5ωρο / εβδομάδα). Μόνο με «συνδρομή Claude»."""
+        if self._settings.provider != "agent_sdk":
+            return {"ok": False, "error": "Τα όρια φαίνονται μόνο με σύνδεση «συνδρομή Claude».", "state": self._usage_view()}
+        if self._usage_refreshing:
+            return {"ok": True, "state": self._usage_view()}
+        self._usage_refreshing = True
+        try:
+            from .providers import get_provider
+
+            provider = get_provider(self._settings)
+            asyncio.run(provider.refresh_usage())
+            return {"ok": True, "state": self._usage_view()}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "state": self._usage_view()}
+        finally:
+            self._usage_refreshing = False
 
     def save_settings(self, data: dict) -> dict:
         self._settings.update(data or {})
@@ -220,6 +255,103 @@ class Api:
         path.write_bytes(img.data)
         self._images[image_id] = path
         return {"ok": True, "image_id": image_id}
+
+    # ------------------------------------------------------------ PDF (από τον υπολογιστή ή το κινητό)
+
+    def _open_pdf(self, raw: bytes, name: str) -> dict:
+        """Ελέγχει το PDF και φτιάχνει μικρογραφίες για το παράθυρο επιλογής σελίδων. Το αρχείο μένει
+        στον φάκελο της συνεδρίας· σε πλήρες μέγεθος αποδίδονται μόνο οι σελίδες που θα επιλεγούν."""
+        from .pdf_pages import THUMB, PdfError, jpeg_data_url, render
+
+        try:
+            doc = render(raw, long_side=THUMB)
+        except PdfError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"Το PDF δεν ανοίγει: {exc}"}
+        pdf_id = uuid.uuid4().hex[:12]
+        path = self._session_dir / f"pdf_{pdf_id}.pdf"
+        path.write_bytes(raw)
+        thumbs = [{"n": k, "thumb": jpeg_data_url(img, quality=80)} for k, img in enumerate(doc.pages, 1)]
+        clean = (name or "PDF").strip()[:120] or "PDF"
+        self._pdfs[pdf_id] = {"name": clean, "path": path, "shown": len(thumbs), "total": doc.total, "rendered": {}}
+        return {"ok": True, "pdf_id": pdf_id, "name": clean, "total": doc.total, "pages": thumbs,
+                "truncated": doc.truncated}
+
+    def add_pdf(self, data_url: str, name: str = "") -> dict:
+        """PDF από τον υπολογιστή (επιλογή αρχείου / σύρσιμο). data_url: data:application/pdf;base64,…"""
+        m = re.match(r"^data:[^;,]*;base64,(.*)$", data_url or "", re.S)
+        if not m:
+            return {"ok": False, "error": "Μη αναγνωρίσιμο αρχείο PDF."}
+        try:
+            raw = base64.b64decode(m.group(1))
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": "Μη αναγνωρίσιμο αρχείο PDF."}
+        return self._open_pdf(raw, name)
+
+    def _pdf_page_paths(self, info: dict, numbers: list[int]) -> dict:
+        """Αποδίδει (μία φορά) τις σελίδες σε πλήρες μέγεθος → {αριθμός: αρχείο PNG}."""
+        from .pdf_pages import png_bytes, render_pages
+
+        todo = [n for n in numbers if n not in info["rendered"]]
+        if todo:
+            for n, img in render_pages(info["path"].read_bytes(), todo).items():
+                out = info["path"].with_name(f"{info['path'].stem}_{n:03d}.png")
+                out.write_bytes(png_bytes(img))
+                info["rendered"][n] = out
+        return {n: info["rendered"][n] for n in numbers if n in info["rendered"]}
+
+    def pdf_preview(self, pdf_id: str, n: int) -> dict:
+        """Μεγάλη προεπισκόπηση μίας σελίδας (μεγέθυνση στο παράθυρο επιλογής)."""
+        from PIL import Image
+
+        from .pdf_pages import PdfError, jpeg_data_url
+
+        info = self._pdfs.get(str(pdf_id))
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = 0
+        if not info or not 1 <= n <= info["shown"]:
+            return {"ok": False, "error": "Η σελίδα δεν βρέθηκε."}
+        try:
+            path = self._pdf_page_paths(info, [n])[n]
+        except (PdfError, KeyError, OSError) as exc:
+            return {"ok": False, "error": str(exc) or "Η σελίδα δεν αποδίδεται."}
+        with Image.open(path) as im:
+            return {"ok": True, "data_url": jpeg_data_url(im.convert("RGB"), width=1600, quality=85)}
+
+    def pdf_take(self, pdf_id: str, pages: list[int]) -> dict:
+        """Οι σελίδες που διάλεξε ο χρήστης γίνονται εικόνες της εφαρμογής (όπως οι φωτογραφίες)."""
+        from PIL import Image
+
+        from .pdf_pages import PdfError, jpeg_data_url
+
+        info = self._pdfs.get(str(pdf_id))
+        if not info:
+            return {"ok": False, "error": "Το PDF δεν είναι πια διαθέσιμο. Προσθέστε το ξανά."}
+        nums = []
+        for n in pages or []:
+            try:
+                n = int(n)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= n <= info["shown"] and n not in nums:
+                nums.append(n)
+        if not nums:
+            return {"ok": False, "error": "Δεν επιλέχθηκε καμία σελίδα."}
+        try:
+            paths = self._pdf_page_paths(info, nums)
+        except PdfError as exc:
+            return {"ok": False, "error": str(exc)}
+        out = []
+        for n in nums:
+            image_id = uuid.uuid4().hex[:12]
+            self._images[image_id] = paths[n]
+            with Image.open(paths[n]) as im:
+                shown = jpeg_data_url(im.convert("RGB"), width=1600, quality=85)
+            out.append({"image_id": image_id, "n": n, "data_url": shown, "name": f"{info['name']} — σελ. {n}"})
+        return {"ok": True, "pages": out}
 
     def transcribe(self, jobs: list[dict]) -> dict:
         """jobs: [{"job_id", "image_ids": [σελίδα 1, σελίδα 2, …]}] (δεκτό και το παλιό "image_id").
@@ -376,14 +508,24 @@ class Api:
         from .updates import UpdateError, check
 
         try:
-            return {"ok": True, **check(self._settings.update_repo, __version__)}
+            info = check(self._settings.update_repo, __version__)
+            self._update_url = info.get("url") or ""  # μόνο αυτό το αρχείο μπορεί να εγκατασταθεί
+            return {"ok": True, **info}
         except UpdateError as exc:
             return {"ok": False, "error": str(exc)}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"Αποτυχία ελέγχου: {exc}"}
 
-    def install_update(self, url: str) -> dict:
-        """Κατεβάζει το νέο πρόγραμμα εγκατάστασης (γεγονότα «update_progress»), το τρέχει και κλείνει την εφαρμογή."""
+    def install_update(self, url: str = "") -> dict:
+        """Κατεβάζει το νέο πρόγραμμα εγκατάστασης (γεγονότα «update_progress»), το τρέχει και κλείνει την εφαρμογή.
+
+        Ασφάλεια: εγκαθίσταται ΜΟΝΟ το αρχείο που βρήκε ο τελευταίος έλεγχος ενημερώσεων στα GitHub Releases
+        του αποθετηρίου της εφαρμογής — όχι οποιαδήποτε διεύθυνση έρθει από την οθόνη."""
+        from .updates import is_release_asset
+
+        url = getattr(self, "_update_url", "") or ""
+        if not url or not is_release_asset(url, self._settings.update_repo):
+            return {"ok": False, "error": "Δεν βρέθηκε έγκυρη νέα έκδοση. Πατήστε πρώτα «Έλεγχος για ενημερώσεις»."}
         threading.Thread(target=self._update_worker, args=(url,), daemon=True).start()
         return {"ok": True}
 
@@ -422,13 +564,20 @@ class Api:
                                       "name": name or "Κινητό", "join": bool(join)})
         return res
 
+    def _phone_pdf(self, raw: bytes, name: str) -> dict:
+        res = self._open_pdf(raw, name)
+        if res.get("ok"):
+            self.emit("phone_pdf", {k: v for k, v in res.items() if k != "ok"})
+            return {"ok": True, "pages": res["total"], "shown": len(res["pages"])}
+        return res
+
     def phone_start(self) -> dict:
         """Ανοίγει τη σύνδεση για το κινητό και επιστρέφει διεύθυνση + QR."""
         from .phone import PhoneServer, qr_svg
 
         try:
             if getattr(self, "_phone", None) is None:
-                self._phone = PhoneServer(self._phone_image)
+                self._phone = PhoneServer(self._phone_image, self._phone_pdf)
             self._phone.start()
             choices = self._phone.choices()
             urls = [u for u, _ in choices]
@@ -710,13 +859,38 @@ class Api:
                 self._settings.save()
         return self.get_state()
 
-    def open_file(self, path: str) -> dict:
+    # Ασφάλεια: η οθόνη μπορεί να ανοίξει μόνο έγγραφα που υπάρχουν (Word/PDF/κείμενο) — ποτέ προγράμματα
+    # (.exe, .bat, συντομεύσεις κ.λπ.) ούτε διευθύνσεις Internet.
+    _OPENABLE = {".docx", ".doc", ".pdf", ".md", ".txt"}
+
+    @staticmethod
+    def _local_path(path: str) -> Path | None:
+        text = str(path or "")
+        if not text or "://" in text or text.lower().startswith(("file:", "http:", "https:")):
+            return None
         try:
-            open_path(path)
+            return Path(text).resolve()
+        except (OSError, ValueError):
+            return None
+
+    def open_file(self, path: str) -> dict:
+        p = self._local_path(path)
+        if p is None or not p.is_file() or p.suffix.lower() not in self._OPENABLE:
+            return {"ok": False, "error": "Ανοίγουν μόνο έγγραφα Word/PDF που υπάρχουν."}
+        try:
+            open_path(p)
             return {"ok": True}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
     def open_folder(self, path: str) -> dict:
-        p = Path(path)
-        return self.open_file(str(p if p.is_dir() else p.parent))
+        p = self._local_path(path)
+        if p is not None and not p.is_dir():
+            p = p.parent
+        if p is None or not p.is_dir():
+            return {"ok": False, "error": "Ο φάκελος δεν βρέθηκε."}
+        try:
+            open_path(p)
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}

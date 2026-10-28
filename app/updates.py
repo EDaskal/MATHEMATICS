@@ -73,10 +73,25 @@ def check(repo: str, current: str = __version__) -> dict:
     }
 
 
+def is_release_asset(url: str, repo: str) -> bool:
+    """Μόνο πρόγραμμα εγκατάστασης (.exe) από τα GitHub Releases του αποθετηρίου της εφαρμογής."""
+    from urllib.parse import urlparse
+
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return False
+    owner_repo = "/" + (repo or "").strip("/").lower() + "/releases/download/"
+    return (u.scheme == "https" and u.hostname == "github.com" and not u.username and not u.password
+            and (u.port in (None, 443)) and u.path.lower().startswith(owner_repo) and u.path.lower().endswith(".exe")
+            and ".." not in u.path)
+
+
 def download(url: str, progress: Callable[[int, int], None] | None = None) -> Path:
     if not url.startswith("https://"):
         raise UpdateError("Μη ασφαλής διεύθυνση λήψης.")
-    dest = Path(tempfile.gettempdir()) / url.rsplit("/", 1)[-1]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", url.rsplit("/", 1)[-1].split("?", 1)[0]) or "setup.exe"
+    dest = Path(tempfile.gettempdir()) / name
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as out:  # noqa: S310

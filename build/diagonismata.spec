@@ -30,6 +30,12 @@ hiddenimports += ["matplotlib.backends.backend_svg", "matplotlib.backends.backen
 hiddenimports += collect_submodules("fontTools.ttLib.tables")  # πίνακες γραμματοσειρών (name, cmap, MATH) — δυναμική φόρτωση
 hiddenimports += collect_submodules("segno")  # QR code για το κινητό
 hiddenimports += ["olefile"]  # εξισώσεις MathType (έλεγχος ίδιων ασκήσεων)
+# PDF: pypdfium2 + pdfium.dll (pypdfium2_raw) — τα hooks του PyInstaller υπάρχουν, αλλά τα παίρνουμε ρητά
+for pkg in ("pypdfium2", "pypdfium2_raw"):
+    d, b, h = collect_all(pkg)
+    datas += d
+    binaries += b
+    hiddenimports += h
 
 a = Analysis(  # noqa: F821
     [str(ROOT / "app" / "main.py")],

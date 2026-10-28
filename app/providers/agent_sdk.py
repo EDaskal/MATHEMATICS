@@ -56,8 +56,10 @@ def _friendly(text: str) -> str:
             "Δεν έγινε σύνδεση με τη συνδρομή Claude. Ανοίξτε τις Ρυθμίσεις → "
             "«Σύνδεση με συνδρομή» και επικολλήστε νέο token."
         )
-    if "rate" in low and "limit" in low or "usage limit" in low or "429" in low:
-        return "Εξαντλήθηκε προσωρινά το όριο χρήσης της συνδρομής. Δοκιμάστε ξανά αργότερα."
+    if "rate" in low and "limit" in low or "usage limit" in low or "429" in low or "hit your limit" in low:
+        from ..usage import tracker
+
+        return tracker.limit_message()
     return text or "Άγνωστο σφάλμα από τον Claude."
 
 
@@ -84,10 +86,11 @@ class AgentSdkProvider(Provider):
         kwargs = dict(
             model=self.model or None,
             system_prompt=system,
-            tools=[],
-            allowed_tools=[],
+            tools=[],  # ασφάλεια: κανένα εργαλείο (αρχεία, εντολές, web) — μια «κρυφή οδηγία» μέσα σε
+            allowed_tools=[],  # φωτογραφία/PDF δεν μπορεί να κάνει τίποτα στον υπολογιστή
             max_turns=max_turns,
             setting_sources=[],
+            strict_mcp_config=True,  # κανένας εξωτερικός διακομιστής εργαλείων (MCP)· μόνο ανάγνωση εικόνων
             cwd=tempfile.gettempdir(),
             env=env,
             stderr=(errlog.append if errlog is not None else (lambda _line: None)),
@@ -96,10 +99,16 @@ class AgentSdkProvider(Provider):
             kwargs["output_format"] = {"type": "json_schema", "schema": schema}
         return ClaudeAgentOptions(**kwargs)
 
-    async def _run(self, content: list[dict], options, errlog: list[str] | None = None) -> "object":
+    async def _run(self, content: list[dict], options, errlog: list[str] | None = None, images: int = 0,
+                   count: bool = True) -> "object":
+        import time
+
         from claude_agent_sdk import ResultMessage, query
 
+        from ..usage import tracker
+
         _hide_console_windows()
+        started = time.monotonic()
 
         async def prompts():
             yield {
@@ -113,11 +122,25 @@ class AgentSdkProvider(Provider):
             async for msg in query(prompt=prompts(), options=options):
                 if isinstance(msg, ResultMessage):
                     result = msg
+                elif type(msg).__name__ == "RateLimitEvent":  # όρια συνδρομής (5ωρο, εβδομάδα)
+                    try:
+                        tracker.record_limits(getattr(msg.rate_limit_info, "raw", None) or {})
+                    except Exception:  # noqa: BLE001 — ποτέ εμπόδιο στη μεταγραφή
+                        pass
         except Exception as exc:  # CLI δεν ξεκίνησε, δίκτυο κ.λπ.
             detail = "\n".join((errlog or [])[-8:])
             raise ProviderError(_friendly(detail or str(exc)) + (f"\n\nΛεπτομέρειες: {detail}" if detail else "")) from exc
         if result is None:
             raise ProviderError("Ο Claude δεν επέστρεψε αποτέλεσμα.")
+        if count:  # η ανανέωση της ένδειξης χρήσης δεν μετρά ως ανάγνωση
+            try:
+                models = list((getattr(result, "model_usage", None) or {}).keys())
+                tracker.record_result(images=images, usage=getattr(result, "usage", None) or {},
+                                      cost_usd=getattr(result, "total_cost_usd", None),
+                                      seconds=time.monotonic() - started,
+                                      model=models[0] if models else "", error=bool(result.is_error))
+            except Exception:  # noqa: BLE001
+                pass
         if result.is_error:
             raise ProviderError(_friendly(result.result or result.subtype))
         return result
@@ -139,7 +162,8 @@ class AgentSdkProvider(Provider):
         errlog: list[str] = []
         options = self._options(system, schema, max_turns=4, errlog=errlog)
         try:
-            result = await asyncio.wait_for(self._run(content, options, errlog), timeout=self.timeout_sec)
+            result = await asyncio.wait_for(self._run(content, options, errlog, images=len(images)),
+                                            timeout=self.timeout_sec)
         except asyncio.TimeoutError as exc:
             raise ProviderError("Ο Claude άργησε υπερβολικά να απαντήσει. Δοκιμάστε ξανά.") from exc
         data = getattr(result, "structured_output", None)
@@ -152,6 +176,21 @@ class AgentSdkProvider(Provider):
         content = [{"type": "text", "text": "Δοκιμή σύνδεσης."}]
         result = await asyncio.wait_for(self._run(content, options), timeout=120)
         return (result.result or "OK").strip()[:80]
+
+    async def refresh_usage(self) -> None:
+        """Ελάχιστη κλήση (το μικρότερο μοντέλο, λίγες λέξεις) μόνο για να έρθουν τα όρια της συνδρομής.
+        Κοστίζει ελάχιστα (~1 χιλιοστό του 5ώρου) και δεν μετρά ως ανάγνωση."""
+        content = [{"type": "text", "text": "OK"}]
+        last: Exception | None = None
+        for model in ("haiku", self.model):
+            options = self._options("Απάντησε μόνο με τη λέξη ΟΚ.", None, max_turns=1)
+            options.model = model or None
+            try:
+                await asyncio.wait_for(self._run(content, options, count=False), timeout=90)
+                return
+            except (ProviderError, asyncio.TimeoutError) as exc:
+                last = exc
+        raise ProviderError(str(last) if last else "Δεν ήρθαν στοιχεία χρήσης.")
 
 
 def setup_token_command() -> list[str] | None:

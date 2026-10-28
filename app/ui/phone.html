@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#2f5d9e">
-<title>Φωτογραφίες ασκήσεων</title>
+<title>Φωτογραφίες και PDF ασκήσεων</title>
 <style>
   :root { --bg: #f5f6f8; --card: #fff; --ink: #1d2433; --muted: #6a7385; --line: #dde1e8; --accent: #2f5d9e;
           --accent-soft: #e8eff9; --ok: #2e7d4f; --warn: #b3261e; --warn-soft: #fdecea; }
@@ -34,27 +34,35 @@
   .item.ok .st { background: rgba(46,125,79,.9); }
   .item.err .st { background: rgba(179,38,30,.92); }
   .item.join { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .item.pdf { display: grid; place-items: center; text-align: center; padding: 8px 6px 34px; background: var(--card); color: var(--ink); }
+  .item.pdf .ico { font-size: 34px; line-height: 1; }
+  .item.pdf .nm { font-size: 12px; word-break: break-word; margin-top: 4px; max-height: 4.2em; overflow: hidden; }
+  .tertiary { background: transparent; color: var(--accent); border: 2px solid var(--accent-soft) !important; }
   .error { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 14px; display: none; }
   .count { font-weight: 600; color: var(--ok); }
 </style>
 </head>
 <body>
-  <h1><span class="logo">∑</span> Φωτογραφίες ασκήσεων</h1>
-  <div class="muted">Γεννήτρια Διαγωνισμάτων — οι φωτογραφίες φτάνουν αμέσως στον υπολογιστή.</div>
+  <h1><span class="logo">∑</span> Φωτογραφίες και PDF ασκήσεων</h1>
+  <div class="muted">Γεννήτρια Διαγωνισμάτων — φωτογραφίες και PDF φτάνουν αμέσως στον υπολογιστή.</div>
 
   <div class="card target" id="target">Σύνδεση με τον υπολογιστή…</div>
   <div class="error" id="error"></div>
 
   <button class="big primary" id="btn-camera">📷 Φωτογράφιση</button>
   <button class="big secondary" id="btn-gallery">🖼 Από τις φωτογραφίες (πολλές μαζί)</button>
+  <button class="big tertiary" id="btn-pdf">📄 Αρχείο PDF (από τα Αρχεία / Λήψεις)</button>
   <input type="file" id="in-camera" accept="image/*" capture="environment" hidden>
   <input type="file" id="in-gallery" accept="image/*" multiple hidden>
+  <input type="file" id="in-pdf" accept="application/pdf,.pdf" multiple hidden>
 
   <div class="card">
     <label class="join"><input type="checkbox" id="join">
       <span>Η επόμενη φωτογραφία είναι <b>συνέχεια</b> της προηγούμενης (η ίδια άσκηση συνεχίζει στην επόμενη σελίδα)</span></label>
     <div class="muted">Συμβουλή: κρατήστε το κινητό παράλληλα με τη σελίδα, με καλό φως και χωρίς σκιές. Μία φωτογραφία
       μπορεί να έχει πολλές ασκήσεις.</div>
+    <div class="muted" style="margin-top:6px">PDF: στέλνεται ολόκληρο· στον υπολογιστή ανοίγει παράθυρο για να διαλέξετε
+      ποιες σελίδες θα μπουν (έως 60 MB· εμφανίζονται έως 200 σελίδες).</div>
   </div>
 
   <div class="muted" id="summary"></div>
@@ -66,6 +74,7 @@ const $ = (s) => document.querySelector(s);
 let queue = Promise.resolve();
 let sent = 0;
 let shot = 0;
+let connLost = false;
 
 function showError(msg) { const e = $("#error"); e.textContent = msg; e.style.display = msg ? "block" : "none"; }
 
@@ -74,10 +83,11 @@ async function status() {
     const r = await fetch(base + "/status", { cache: "no-store" });
     const j = await r.json();
     $("#target").innerHTML = j.target
-      ? `Οι φωτογραφίες πάνε στο: <b>${escapeHtml(j.target)}</b>`
+      ? `Φωτογραφίες και PDF πάνε στο: <b>${escapeHtml(j.target)}</b>`
       : "Συνδέθηκε με τον υπολογιστή. Οι φωτογραφίες πάνε εκεί που δείχνει η εφαρμογή.";
-    showError("");
+    if (connLost) { connLost = false; showError(""); }  // σβήνει μόνο το μήνυμα σύνδεσης, όχι λάθη αποστολής
   } catch (_) {
+    connLost = true;
     showError("Δεν απαντά ο υπολογιστής. Είναι στο ίδιο Wi-Fi; Είναι ανοιχτή η εφαρμογή; Αν πατήθηκε «Διακοπή», σκανάρετε ξανά το νέο QR.");
   }
 }
@@ -151,8 +161,67 @@ async function upload(file, join, tile) {
   }
 }
 
+const MAX_PDF = 60 * 1024 * 1024;
+
+function addPdfTile(name) {
+  const d = document.createElement("div");
+  d.className = "item pdf";
+  const ico = document.createElement("div"); ico.className = "ico"; ico.textContent = "📄";
+  const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = name;
+  const st = document.createElement("div"); st.className = "st"; st.textContent = "⏳ αποστολή…";
+  d.append(ico, nm, st);
+  $("#list").prepend(d);
+  return d;
+}
+
+async function uploadPdf(file, tile) {
+  const st = tile.querySelector(".st");
+  if (file.size > MAX_PDF) {
+    tile.className = "item pdf err"; st.textContent = "✕ πολύ μεγάλο";
+    showError(`Το «${file.name}» είναι μεγαλύτερο από 60 MB.`);
+    return;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      st.textContent = "⏳ αποστολή…";
+      const r = await fetch(base + "/upload-pdf", { method: "POST",
+        headers: { "Content-Type": "application/pdf", "X-File-Name": encodeURIComponent(file.name || "PDF") }, body: file });
+      const j = await r.json();
+      if (!j.ok) { const e = new Error(j.error || "Σφάλμα"); e.final = r.status === 400 || r.status === 413; throw e; }
+      tile.className = "item pdf ok";
+      st.textContent = `✓ ${j.pages} ${j.pages === 1 ? "σελίδα" : "σελίδες"}`;
+      sent++;
+      $("#summary").innerHTML = `<span class="count">${sent} ${sent === 1 ? "αποστολή" : "αποστολές"} — `
+        + "για τα PDF διαλέξτε τις σελίδες στον υπολογιστή</span>";
+      showError("");
+      return;
+    } catch (e) {
+      if (attempt === 1 || e.final) {
+        tile.className = "item pdf err";
+        st.textContent = e.final ? "✕ δεν έγινε δεκτό" : "✕ πατήστε για νέα προσπάθεια";
+        if (!e.final) tile.onclick = () => { tile.onclick = null; tile.className = "item pdf"; queue = queue.then(() => uploadPdf(file, tile)); };
+        showError(`«${file.name}»: ` + (e.message || e) + (e.final ? "" : ". Ελέγξτε ότι κινητό και υπολογιστής είναι στο ίδιο Wi-Fi."));
+        return;
+      }
+    }
+  }
+}
+
+function handlePdf(files) {
+  const list = Array.from(files || []).filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
+  if (!list.length) { showError("Επιλέξτε αρχείο PDF."); return; }
+  list.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  for (const f of list) {
+    const tile = addPdfTile(f.name || "PDF");
+    queue = queue.then(() => uploadPdf(f, tile));
+  }
+}
+
 function handle(files) {
-  const list = Array.from(files || []).filter((f) => !f.type || f.type.startsWith("image/"));
+  const all = Array.from(files || []);
+  const pdfs = all.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
+  if (pdfs.length) handlePdf(pdfs);
+  const list = all.filter((f) => !pdfs.includes(f) && (!f.type || f.type.startsWith("image/")));
   list.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   for (const f of list) {
     const join = $("#join").checked;
@@ -166,6 +235,8 @@ $("#btn-camera").onclick = () => $("#in-camera").click();
 $("#btn-gallery").onclick = () => $("#in-gallery").click();
 $("#in-camera").onchange = (e) => { handle(e.target.files); e.target.value = ""; };
 $("#in-gallery").onchange = (e) => { handle(e.target.files); e.target.value = ""; };
+$("#btn-pdf").onclick = () => $("#in-pdf").click();
+$("#in-pdf").onchange = (e) => { handlePdf(e.target.files); e.target.value = ""; };
 status();
 setInterval(status, 4000);
 </script>

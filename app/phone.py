@@ -7,7 +7,9 @@
 Ασφάλεια:
 - ο server ανοίγει μόνο όταν το ζητήσει ο χρήστης και κλείνει με «Διακοπή» ή με το κλείσιμο της εφαρμογής·
 - κάθε διεύθυνση περιέχει τυχαίο κλειδί (token) που αλλάζει σε κάθε εκκίνηση· χωρίς αυτό απαντά 404·
-- δέχεται μόνο εικόνες, έως MAX_BYTES ανά αποστολή.
+- δέχεται μόνο εικόνες (έως MAX_BYTES ανά αποστολή) και αρχεία PDF (έλεγχος υπογραφής «%PDF»,
+  έως MAX_PDF_BYTES)· τα PDF αποδίδονται σε εικόνες τοπικά (`pdf_pages`) και ο χρήστης διαλέγει
+  στον υπολογιστή ποιες σελίδες θα μπουν.
 """
 
 from __future__ import annotations
@@ -20,11 +22,13 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
+from urllib.parse import unquote
 
 from .paths import resource
 
 DEFAULT_PORT = 8766
 MAX_BYTES = 40 * 1024 * 1024
+MAX_PDF_BYTES = 60 * 1024 * 1024
 
 
 _VIRTUAL_HINTS = ("virtualbox", "vmware", "vethernet", "hyper-v", "wsl", "docker", "loopback", "bluetooth",
@@ -134,10 +138,13 @@ def qr_svg(text: str, scale: int = 6) -> str:
 
 
 class PhoneServer:
-    """Ο server για το κινητό. `on_image(data_url, name, join)` → dict (π.χ. {"ok": True})."""
+    """Ο server για το κινητό. `on_image(data_url, name, join)` → dict (π.χ. {"ok": True})·
+    `on_pdf(bytes, name)` → dict (π.χ. {"ok": True, "pages": 12})."""
 
-    def __init__(self, on_image: Callable[[str, str, bool], dict]):
+    def __init__(self, on_image: Callable[[str, str, bool], dict],
+                 on_pdf: Callable[[bytes, str], dict] | None = None):
         self.on_image = on_image
+        self.on_pdf = on_pdf
         self.token = secrets.token_urlsafe(12)
         self.target = ""
         self.count = 0
@@ -220,6 +227,9 @@ class PhoneServer:
 
             def do_POST(self):  # noqa: N802
                 r = self._route()
+                if r == "upload-pdf":
+                    self._upload_pdf()
+                    return
                 if r != "upload":
                     self._send(404, b"Not found", "text/plain")
                     return
@@ -233,6 +243,32 @@ class PhoneServer:
                 try:
                     data = json.loads(self.rfile.read(n).decode("utf-8"))
                     res = server.on_image(str(data.get("data", "")), str(data.get("name", ""))[:120], bool(data.get("join")))
+                except Exception as exc:  # noqa: BLE001
+                    res = {"ok": False, "error": f"Σφάλμα: {exc}"}
+                if res.get("ok"):
+                    server.count += 1
+                self._json(200 if res.get("ok") else 400, {**res, "target": server.target, "count": server.count})
+
+            def _upload_pdf(self) -> None:
+                """Σώμα = τα bytes του PDF, όνομα στην κεφαλίδα X-File-Name (URL-encoded)."""
+                if server.on_pdf is None:
+                    self._json(404, {"ok": False, "error": "Η εφαρμογή δεν δέχεται PDF."})
+                    return
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    n = 0
+                if n <= 0 or n > MAX_PDF_BYTES:
+                    self._json(413, {"ok": False,
+                                     "error": f"Το PDF είναι πολύ μεγάλο (έως {MAX_PDF_BYTES // (1024 * 1024)} MB)."})
+                    return
+                raw = self.rfile.read(n)
+                if b"%PDF-" not in raw[:1024]:
+                    self._json(400, {"ok": False, "error": "Το αρχείο δεν είναι PDF."})
+                    return
+                name = unquote(self.headers.get("X-File-Name") or "")[:120] or "PDF"
+                try:
+                    res = server.on_pdf(raw, name)
                 except Exception as exc:  # noqa: BLE001
                     res = {"ok": False, "error": f"Σφάλμα: {exc}"}
                 if res.get("ok"):

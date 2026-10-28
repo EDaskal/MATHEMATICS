@@ -60,6 +60,8 @@ class Settings:
     corpus_backup: bool = True
     # Έλεγχος αν οι νέες ασκήσεις υπάρχουν ήδη στο έγγραφο: off | low (μόνο ίδιες) | normal | high
     dup_check: str = "normal"
+    # Ένδειξη χρήσης της συνδρομής: ανανέωση με το άνοιγμα της εφαρμογής (μία ελάχιστη κλήση)
+    usage_check: bool = True
 
     @classmethod
     def load(cls) -> "Settings":

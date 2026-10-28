@@ -79,6 +79,16 @@ class AnthropicApiProvider(Provider):
             raise ProviderError(_friendly(exc)) from exc
         finally:
             await client.close()
+        try:  # κατανάλωση (tokens) για την ένδειξη χρήσης· με κλειδί API δεν υπάρχουν όρια συνδρομής
+            from ..usage import tracker
+
+            u = getattr(resp, "usage", None)
+            tracker.record_result(images=len(images), model=getattr(resp, "model", "") or self.model, usage={
+                "input_tokens": getattr(u, "input_tokens", 0) or 0, "output_tokens": getattr(u, "output_tokens", 0) or 0,
+                "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
+                "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0})
+        except Exception:  # noqa: BLE001
+            pass
         for block in resp.content:
             if getattr(block, "type", "") == "tool_use" and block.name == _TOOL_NAME:
                 if isinstance(block.input, dict):

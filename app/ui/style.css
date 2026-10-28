@@ -406,3 +406,74 @@ body.mode-corpus .steps { visibility: hidden; }
 .dup-row .btn.small.ghost { margin-left: 0; }
 .place-modes label[hidden] { display: none !important; }
 #c-audit-numbering { flex-basis: 100%; }
+
+/* ---------- επιλογή σελίδων PDF */
+.pdfpick-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.pdfpick-tools input[type=text] { width: 140px; }
+.pdfpick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; max-height: 56vh;
+  overflow: auto; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.pdfpage { position: relative; border: 2px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer;
+  padding: 0; overflow: hidden; text-align: left; }
+.pdfpage img { display: block; width: 100%; height: auto; }
+.pdfpage .pn { position: absolute; left: 0; right: 0; bottom: 0; font-size: 12px; padding: 3px 6px; color: #fff;
+  background: rgba(0, 0, 0, .55); display: flex; justify-content: space-between; }
+.pdfpage.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.pdfpage.on .pn { background: var(--accent); }
+.pdfpage .zoom { position: absolute; top: 4px; right: 4px; border: 0; border-radius: 6px; background: rgba(0, 0, 0, .55);
+  color: #fff; font-size: 13px; padding: 2px 6px; cursor: zoom-in; }
+#pdfpick .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
+.warn-text { color: var(--warn); }
+
+/* ---------- χρήση συνδρομής Claude */
+.usage-chip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; margin-right: 6px; white-space: nowrap; }
+.usage-chip[hidden] { display: none !important; }
+.usage-chip:hover { border-color: var(--accent); }
+.usage-chip .uc-brand { font-weight: 600; color: var(--muted); }
+.usage-chip .uc-w { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.usage-chip .uc-k { color: var(--muted); }
+.ubar { display: inline-block; width: 38px; height: 6px; border-radius: 3px; background: var(--hover); overflow: hidden; vertical-align: middle; }
+.ubar > i { display: block; height: 100%; background: var(--ok); border-radius: 3px; }
+.ubar.mid > i { background: #c98a00; }
+.ubar.high > i { background: var(--warn); }
+.usage-chip.stale { opacity: .75; }
+.usage-chip.blocked { border-color: var(--warn); color: var(--warn); }
+.usage-chip .uc-spin { color: var(--muted); }
+.usage-status { margin: 6px 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.usage-status.warn { background: var(--amber-soft); color: var(--amber); }
+.usage-status.bad { background: var(--warn-soft); color: var(--warn); }
+.usage-status.none { background: var(--hover); color: var(--muted); font-weight: 400; }
+.usage-windows { display: grid; gap: 12px; }
+.uwin { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.uwin-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.uwin-top b { font-size: 14px; }
+.uwin-pct { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.uwin .ubar { width: 100%; height: 10px; border-radius: 5px; margin: 6px 0 4px; }
+.uwin .ubar > i { border-radius: 5px; }
+.uwin-sub { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.usage-note { margin: 10px 0 0; font-size: 13px; }
+.usage-note:empty { display: none; }
+.usage-h { font-size: 14px; margin: 16px 0 6px; }
+.usage-table-wrap { overflow-x: auto; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-table th, .usage-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+.usage-table th:first-child, .usage-table td:first-child { text-align: left; }
+.usage-table thead th { color: var(--muted); font-weight: 600; }
+.usage-help { margin-top: 12px; font-size: 13px; }
+.usage-help summary { cursor: pointer; font-weight: 600; }
+.usage-help ul { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 4px; }
+#usage .modal-foot label.check { display: flex; align-items: center; gap: 6px; }
+.usage-chip .uc-w .pct-mid { color: #a86f00; }
+.usage-chip .uc-w .pct-high { color: var(--warn); font-weight: 700; }
+@media (max-width: 1599px) {  /* στενότερες οθόνες: συμπαγής ένδειξη (μόνο ποσοστά) */
+  .usage-chip { gap: 6px; padding: 3px 8px; margin-right: 2px; }
+  .usage-chip .uc-brand, .usage-chip .ubar { display: none; }
+}
+.top-actions .icon-btn { white-space: nowrap; }
+@media (max-width: 1599px) {
+  .topbar { gap: 14px; }
+  #btn-theme .lbl { display: none; }
+}
+@media (max-width: 1439px) {
+  .brand > span:not(.logo) { display: none; }
+}

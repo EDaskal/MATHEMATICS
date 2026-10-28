@@ -23,6 +23,7 @@
     <button data-tab="done"><span class="n">3</span> Word</button>
   </nav>
   <div class="top-actions">
+    <button class="usage-chip" id="usage-chip" hidden title="Χρήση συνδρομής Claude — πατήστε για λεπτομέρειες"></button>
     <button class="icon-btn" id="btn-guide" title="Οδηγός χρήσης">? Οδηγός</button>
     <button class="icon-btn" id="btn-theme" title="Εμφάνιση">◐ Αυτόματο</button>
     <button class="icon-btn" id="btn-about" title="Σχετικά, έκδοση και ιστορικό αλλαγών"><span id="app-version">v</span></button>
@@ -428,7 +429,8 @@
         <ol class="phone-steps">
           <li>Το κινητό να είναι στο <b>ίδιο Wi-Fi</b> με τον υπολογιστή.</li>
           <li>Ανοίξτε την <b>κάμερα</b> του κινητού και στρέψτε τη στο QR. Πατήστε τον σύνδεσμο που εμφανίζεται.</li>
-          <li>Στη σελίδα που ανοίγει πατήστε <b>📷 Φωτογράφιση</b> (ή <b>🖼 Από τις φωτογραφίες</b> για πολλές μαζί).</li>
+          <li>Στη σελίδα που ανοίγει πατήστε <b>📷 Φωτογράφιση</b> (ή <b>🖼 Από τις φωτογραφίες</b> για πολλές μαζί,
+            ή <b>📄 Αρχείο PDF</b>· για τα PDF διαλέγετε εδώ ποιες σελίδες θα μπουν).</li>
           <li>Κάθε φωτογραφία εμφανίζεται εδώ αμέσως. Μπορείτε να κλείσετε αυτό το παράθυρο· η σύνδεση μένει ανοιχτή.</li>
         </ol>
         <div class="kv"><span>Προορισμός</span><b id="phone-target"></b></div>
@@ -446,6 +448,71 @@
       <button class="btn ghost danger" id="phone-stop">Διακοπή σύνδεσης</button>
       <div class="spacer"></div>
       <button class="btn primary" data-close>Κλείσιμο (η σύνδεση μένει ανοιχτή)</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ Χρήση συνδρομής Claude -->
+<div class="modal" id="usage" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2>Χρήση συνδρομής Claude</h2>
+      <button class="icon-btn" data-close>✕</button>
+    </div>
+    <div id="usage-status" class="usage-status"></div>
+    <div id="usage-windows" class="usage-windows"></div>
+    <div id="usage-estimate" class="usage-note"></div>
+    <h3 class="usage-h">Κατανάλωση από την εφαρμογή</h3>
+    <div class="usage-table-wrap"><table class="usage-table" id="usage-table"></table></div>
+    <div class="small muted" id="usage-foot"></div>
+    <details class="usage-help">
+      <summary>Πώς λειτουργούν τα όρια της συνδρομής</summary>
+      <ul>
+        <li><b>Κοινά για όλο τον λογαριασμό:</b> μετράει ό,τι γίνεται στο claude.ai (υπολογιστής και κινητό),
+          στο Claude Code και σε αυτή την εφαρμογή. Αν γίνεται ταυτόχρονα χρήση και αλλού, τα ποσοστά ανεβαίνουν κι από εκεί.</li>
+        <li><b>5ωρο παράθυρο:</b> ξεκινά με το πρώτο μήνυμα και μηδενίζεται 5 ώρες μετά (η ώρα φαίνεται παραπάνω).</li>
+        <li><b>Εβδομαδιαίο όριο:</b> ανεξάρτητο από το 5ωρο· μπορεί να εξαντληθεί ακόμη κι αν το 5ωρο έχει περιθώριο.
+          Σε ορισμένα πλάνα υπάρχει και χωριστό εβδομαδιαίο όριο για το Opus.</li>
+        <li><b>Το μοντέλο μετράει:</b> το Opus καταναλώνει περισσότερο από το Sonnet. Για οικονομία: Ρυθμίσεις → Μοντέλο → Sonnet.
+          Μία φωτογραφία με πολλές ασκήσεις κοστίζει λιγότερο από πολλές φωτογραφίες με μία άσκηση η καθεμία.</li>
+        <li><b>Από πού έρχονται τα στοιχεία:</b> τα στέλνει η Anthropic μαζί με κάθε ανάγνωση. Το «↻ Ανανέωση» κάνει μία
+          ελάχιστη κλήση με το μικρότερο μοντέλο, που καταναλώνει ελάχιστα.</li>
+        <li><b>Πλήρης εικόνα:</b> στο claude.ai → Ρυθμίσεις → Χρήση (Settings → Usage).</li>
+        <li>Το «αντίστοιχο κόστος API» <b>δεν χρεώνεται</b>: με τη συνδρομή πληρώνετε μόνο το μηνιαίο ποσό. Δείχνει πόσο θα
+          κόστιζε η ίδια δουλειά με κλειδί API.</li>
+      </ul>
+    </details>
+    <div class="modal-foot">
+      <label class="check small"><input type="checkbox" id="usage-auto"> Ενημέρωση με το άνοιγμα της εφαρμογής</label>
+      <div class="spacer"></div>
+      <button class="btn" id="usage-refresh">↻ Ανανέωση τώρα</button>
+      <button class="btn primary" data-close>Κλείσιμο</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ Επιλογή σελίδων PDF -->
+<div class="modal" id="pdfpick" hidden>
+  <div class="modal-body wide">
+    <div class="modal-head">
+      <h2 id="pdfpick-title">Σελίδες PDF</h2>
+      <button class="icon-btn" id="pdfpick-x" title="Ακύρωση">✕</button>
+    </div>
+    <div class="small" id="pdfpick-dest"></div>
+    <div class="pdfpick-tools">
+      <button class="btn small ghost" id="pdfpick-all">Όλες</button>
+      <button class="btn small ghost" id="pdfpick-none">Καμία</button>
+      <label class="small">Σελίδες: <input type="text" id="pdfpick-range" placeholder="π.χ. 1-3, 5"></label>
+      <span class="small muted" id="pdfpick-info"></span>
+    </div>
+    <div class="pdfpick-grid" id="pdfpick-grid"></div>
+    <label class="check small" id="pdfpick-join-wrap"><input type="checkbox" id="pdfpick-join">
+      <span id="pdfpick-join-text">Οι σελίδες είναι συνέχεια η μία της άλλης (ασκήσεις που περνούν στην επόμενη σελίδα)</span></label>
+    <p class="small muted" id="pdfpick-note"></p>
+    <div class="modal-foot">
+      <button class="btn ghost" id="pdfpick-cancel">Ακύρωση</button>
+      <div class="spacer"></div>
+      <button class="btn primary" id="pdfpick-ok">Προσθήκη</button>
     </div>
   </div>
 </div>

@@ -26,7 +26,7 @@ const api = new Proxy({}, {
   get: (_, name) => async (...args) => {
     if (MODE === "pywebview") return window.pywebview.api[name](...args);
     const r = await fetch(`/api/${name}`, { method: "POST", body: JSON.stringify(args),
-      headers: { "X-Api-Token": new URLSearchParams(location.search).get("k") || "" } });
+      headers: { "Content-Type": "application/json", "X-Api-Token": new URLSearchParams(location.search).get("k") || "" } });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || "Σφάλμα");
     return j.result;
@@ -46,7 +46,7 @@ async function initBridge() {
 async function pollEvents() {
   for (;;) {
     try {
-      const events = await api._poll();
+      const events = await api.poll_events();
       for (const ev of events || []) window.__onPyEvent(ev);
     } catch (_) { /* server έκλεισε */ }
     await sleep(700);
@@ -57,6 +57,8 @@ window.__onPyEvent = (payload) => {
   if (payload.event === "transcribed") onTranscribed(payload.data);
   if (payload.event === "corpus_transcribed") onCorpusTranscribed(payload.data);
   if (payload.event === "phone_image") onPhoneImage(payload.data);
+  if (payload.event === "phone_pdf") onPhonePdf(payload.data);
+  if (payload.event === "usage") renderUsage(payload.data);
   if (payload.event === "update_progress") onUpdateProgress(payload.data);
 };
 
@@ -140,7 +142,8 @@ function applyTheme(theme) {
   else delete root.dataset.theme;
   const btn = $("#btn-theme");
   const labels = { light: "☀ Φωτεινό", dark: "☾ Σκοτεινό", system: "◐ Αυτόματο" };
-  btn.textContent = labels[theme] || labels.system;
+  const [icon, ...rest] = (labels[theme] || labels.system).split(" ");
+  btn.replaceChildren(icon, " ", el("span", { class: "lbl", text: rest.join(" ") }));  // σε στενές οθόνες μόνο το εικονίδιο
   btn.title = "Εμφάνιση: " + ({ light: "φωτεινή", dark: "σκοτεινή", system: "όπως τα Windows" }[theme] || "όπως τα Windows") + " — πατήστε για αλλαγή";
 }
 
@@ -167,13 +170,39 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+/** Ασφάλεια: HTML που προέρχεται από μεταγραφές, αρχεία Word/PDF ή το Internet δεν πρέπει να τρέξει κώδικα
+ *  στην οθόνη. Αφαιρεί επικίνδυνα στοιχεία (script, iframe, …), χειριστές συμβάντων (onerror=…) και
+ *  συνδέσμους javascript:. Το <template> δεν εκτελεί/φορτώνει τίποτα όσο γίνεται ο καθαρισμός. */
+const SAFE_TAGS = new Set(["P", "BR", "B", "STRONG", "I", "EM", "U", "S", "DEL", "SUB", "SUP", "CODE", "PRE", "SPAN", "DIV",
+  "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "HR", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD",
+  "A", "IMG", "KBD", "SMALL", "MARK", "DETAILS", "SUMMARY", "INPUT"]);
+function sanitizeHtml(html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  for (const node of [...tpl.content.querySelectorAll("*")]) {
+    if (!SAFE_TAGS.has(node.tagName)) { node.replaceWith(document.createTextNode(node.textContent || "")); continue; }
+    for (const at of [...node.attributes]) {
+      const n = at.name.toLowerCase(), v = at.value.trim().toLowerCase();
+      const okUrl = !v || v.startsWith("http://") || v.startsWith("https://") || v.startsWith("#") || v.startsWith("data:image/");
+      if (n.startsWith("on") || n === "style" || n === "srcdoc" || ((n === "href" || n === "src" || n === "xlink:href") && !okUrl)) node.removeAttribute(at.name);
+    }
+    if (node.tagName === "INPUT" && node.type !== "checkbox") node.remove();
+    // εξωτερικοί σύνδεσμοι: στον browser, ποτέ μέσα στο παράθυρο της εφαρμογής
+    if (node.tagName === "A" && /^https?:/i.test(node.getAttribute("href") || "")) { node.setAttribute("target", "_blank"); node.setAttribute("rel", "noopener noreferrer"); }
+  }
+  return tpl.innerHTML;
+}
+const safeMarkdown = (md) => sanitizeHtml(marked.parse(String(md || ""), { breaks: false, gfm: true }));
+
 function mdToHtml(text, refmap = {}) {
   const maths = [];
   let t = String(text || "").replace(/[ ]*(?:\t|⇥)[ ]*/g, " @@TAB@@ ");
   t = t.replace(/\$\$([\s\S]+?)\$\$/g, (_, g) => { maths.push(renderMath(g, true)); return `@@M${maths.length - 1}@@`; });
   t = t.replace(/\$([^$\n]+?)\$/g, (_, g) => { maths.push(renderMath(g, false)); return `@@M${maths.length - 1}@@`; });
-  t = t.replace(/\[\[([^\]]+)\]\]/g, (_, g) => refmap[g.trim()] || `(${g.trim()})`);
-  let html = marked.parse(t, { breaks: false, gfm: true });
+  // κείμενο ασκήσεων: κανένα «ωμό» HTML (π.χ. από φωτογραφία/PDF με κρυφές οδηγίες ή από αρχείο Word)
+  t = t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  t = t.replace(/\[\[([^\]]+)\]\]/g, (_, g) => escapeHtml(refmap[g.trim()] || `(${g.trim()})`));
+  let html = sanitizeHtml(marked.parse(t, { breaks: false, gfm: true }));
   html = html.replace(/@@M(\d+)@@/g, (_, i) => maths[+i]);
   html = html.replace(/ ?@@TAB@@ ?/g, '<span class="coltab" title="στήλη (στηλοθέτης στο Word)"></span>');
   return html;
@@ -365,9 +394,372 @@ async function onPhoneImage({ image_id, data_url, name, join }) {
   phoneSync();
 }
 
+/* ================================================================== ΧΡΗΣΗ ΣΥΝΔΡΟΜΗΣ CLAUDE (1.7.2) */
+const USAGE_WIN = {
+  five_hour: { short: "5ωρο", long: "Τρέχον 5ωρο παράθυρο" },
+  seven_day: { short: "Εβδ.", long: "Εβδομάδα — όλα τα μοντέλα" },
+  seven_day_opus: { short: "Opus", long: "Εβδομάδα — μόνο Opus" },
+  seven_day_sonnet: { short: "Sonnet", long: "Εβδομάδα — μόνο Sonnet" },
+};
+const USAGE_ORDER = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"];
+S.usage = null;
+let usageBusy = false;
+
+const nf0 = new Intl.NumberFormat("el-GR", { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat("el-GR", { maximumFractionDigits: 1 });
+const usd = new Intl.NumberFormat("el-GR", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Ποσοστό χρήσης ενός παραθύρου τώρα· αν πέρασε η ώρα μηδενισμού, θεωρείται 0. */
+function usageNow(w, nowSec) {
+  const reset = w.resets_at && w.resets_at <= nowSec;
+  return { pct: reset ? 0 : Math.round((w.utilization || 0) * 100), reset };
+}
+function usageLevel(pct) { return pct >= 90 ? "high" : pct >= 70 ? "mid" : ""; }
+function usageBar(pct) {
+  return el("span", { class: "ubar " + usageLevel(pct) }, el("i", { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
+}
+
+function fmtDuration(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d} ημ. ${h} ώρ.`;
+  if (h) return `${h} ώρ. ${m}′`;
+  if (m) return `${m}′`;
+  return `${sec}″`;
+}
+function fmtWhen(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  const hm = d.toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - day0) / 86400000);
+  if (diff === 0) return `σήμερα ${hm}`;
+  if (diff === 1) return `αύριο ${hm}`;
+  return `${d.toLocaleDateString("el-GR", { weekday: "short", day: "numeric", month: "numeric" })} ${hm}`;
+}
+function fmtAgo(sec) { return sec < 60 ? "μόλις τώρα" : `πριν ${fmtDuration(sec)}`; }
+
+function usageWindows(lim) {
+  const ws = (lim && lim.windows) || {};
+  const names = Object.keys(ws).sort((a, b) => (USAGE_ORDER.indexOf(a) + 1 || 99) - (USAGE_ORDER.indexOf(b) + 1 || 99));
+  return names.map((n) => ({ name: n, ...ws[n], label: USAGE_WIN[n] || { short: n, long: n } }));
+}
+
+function renderUsageChip(st) {
+  const chip = $("#usage-chip");
+  if (!chip) return;
+  const nowSec = Date.now() / 1000;
+  chip.innerHTML = "";
+  chip.className = "usage-chip";
+  if (st.provider === "api") {
+    const t = st.today || {};
+    chip.append(el("span", { text: `API · σήμερα ${t.images || 0} ${t.images === 1 ? "εικόνα" : "εικόνες"}` }));
+    chip.title = "Σύνδεση με κλειδί API: χρέωση ανά χρήση (Claude Console). Πατήστε για λεπτομέρειες.";
+    chip.hidden = false;
+    return;
+  }
+  chip.append(el("span", { class: "uc-brand", text: "Claude" }));
+  const wins = usageWindows(st.limits).filter((w) => w.name === "five_hour" || w.name === "seven_day");
+  if (!wins.length) {
+    chip.append(el("span", { class: "uc-spin", text: st.refreshing || usageBusy ? "ενημέρωση…" : "χρήση: —" }));
+  }
+  for (const w of wins) {
+    const { pct } = usageNow(w, nowSec);
+    chip.append(el("span", { class: "uc-w" }, el("span", { class: "uc-k", text: w.label.short }), usageBar(pct),
+      el("span", { class: usageLevel(pct) ? `pct-${usageLevel(pct)}` : "", text: `${pct}%` })));
+  }
+  const blocked = st.limits && st.limits.status === "rejected" && wins.some((w) => !usageNow(w, nowSec).reset && w.utilization >= 1);
+  if (blocked) chip.classList.add("blocked");
+  if (st.updated_at && nowSec - st.updated_at > 3600) chip.classList.add("stale");
+  const parts = wins.map((w) => { const u = usageNow(w, nowSec); return `${w.label.long}: ${u.pct}%` + (w.resets_at ? ` (μηδενίζεται ${fmtWhen(w.resets_at)})` : ""); });
+  chip.title = (parts.join("\n") || "Χρήση συνδρομής Claude") + (st.updated_at ? `\nΕνημέρωση: ${fmtAgo(nowSec - st.updated_at)}` : "") + "\nΠατήστε για λεπτομέρειες";
+  chip.hidden = false;
+}
+
+function renderUsageModal(st) {
+  const nowSec = Date.now() / 1000;
+  const lim = st.limits;
+  const wins = usageWindows(lim);
+  const box = $("#usage-windows");
+  box.innerHTML = "";
+  const status = $("#usage-status");
+  status.className = "usage-status";
+  if (st.provider === "api") {
+    status.classList.add("none");
+    status.textContent = "Σύνδεση με κλειδί API: δεν υπάρχουν όρια συνδρομής. Η χρέωση γίνεται ανά χρήση — δείτε Claude Console → Usage / Billing.";
+  } else if (!lim || !wins.length) {
+    status.classList.add("none");
+    status.textContent = usageBusy || st.refreshing ? "Ενημέρωση…" : "Δεν υπάρχουν ακόμη στοιχεία. Πατήστε «↻ Ανανέωση τώρα» ή κάντε μια ανάγνωση.";
+  } else {
+    const live = wins.filter((w) => !usageNow(w, nowSec).reset);
+    const full = live.filter((w) => w.utilization >= 1);
+    if (lim.status === "rejected" && full.length) {
+      status.classList.add("bad");
+      const until = Math.max(...full.map((w) => w.resets_at || 0));
+      status.textContent = `⛔ Εξαντλήθηκε το όριο (${full.map((w) => w.label.long).join(", ")}). Ξαναδουλεύει: ${until ? fmtWhen(until) : "αργότερα"}`;
+    } else if (lim.status === "allowed_warning" || live.some((w) => w.utilization >= 0.9)) {
+      status.classList.add("warn");
+      const which = (USAGE_WIN[lim.limit_type] || {}).long;
+      status.textContent = `⚠ Πλησιάζετε το όριο${which ? ` (${which})` : ""}. Οι αναγνώσεις σταματούν όταν φτάσει στο 100% και ξαναρχίζουν με τον μηδενισμό.`;
+    } else {
+      status.textContent = "✓ Υπάρχει διαθέσιμο υπόλοιπο.";
+    }
+  }
+  for (const w of wins) {
+    const u = usageNow(w, nowSec);
+    const left = Math.max(0, 100 - u.pct);
+    const resetTxt = !w.resets_at ? "" : u.reset ? "μηδενίστηκε (θα ενημερωθεί με την επόμενη ανάγνωση)"
+      : `μηδενίζεται ${fmtWhen(w.resets_at)} (σε ${fmtDuration(w.resets_at - nowSec)})`;
+    box.append(el("div", { class: "uwin" },
+      el("div", { class: "uwin-top" }, el("b", { text: w.label.long }), el("span", { class: "uwin-pct", text: `${u.pct}%` })),
+      usageBar(u.pct),
+      el("div", { class: "uwin-sub" }, el("span", { text: `χρησιμοποιήθηκε ${u.pct}% · απομένει ${left}%` }), el("span", { text: resetTxt }))));
+  }
+  if (lim && st.provider !== "api") {
+    let ov = "";
+    if (lim.using_overage) ov = "⚠ Αυτή τη στιγμή χρησιμοποιείται «επιπλέον χρήση» πέρα από τη συνδρομή (χρεώνεται χωριστά).";
+    else if (lim.overage_status === "allowed" || lim.overage_status === "allowed_warning") ov = "Επιπλέον χρήση πέρα από τη συνδρομή: ενεργή — όταν τελειώσει το όριο, η χρήση συνεχίζει με επιπλέον χρέωση.";
+    else if (lim.overage_status) ov = "Επιπλέον χρήση πέρα από τη συνδρομή: όχι ενεργή — όταν τελειώσει το όριο, οι αναγνώσεις περιμένουν τον μηδενισμό (καμία επιπλέον χρέωση).";
+    if (ov) box.append(el("div", { class: "small muted", text: ov }));
+  }
+  // εκτίμηση ανά εικόνα
+  const est = $("#usage-estimate");
+  est.innerHTML = "";
+  const w5 = wins.find((w) => w.name === "five_hour");
+  if (st.provider !== "api" && st.per_image && st.per_image > 0) {
+    const per = st.per_image * 100;
+    let txt = `Εκτίμηση: κάθε εικόνα καταναλώνει περίπου ${nf1.format(per)}% του 5ώρου (από ${st.per_image_samples} εικόνες)`;
+    if (w5) {
+      const u = usageNow(w5, nowSec);
+      const n = Math.floor((100 - u.pct) / per);
+      txt += `· με το τωρινό υπόλοιπο χωρούν περίπου ${nf0.format(Math.max(0, n))} ακόμη εικόνες σε αυτό το 5ωρο`;
+    }
+    est.append(el("div", { text: txt + "." }),
+      el("div", { class: "small muted", text: "Η εκτίμηση αλλάζει με το μοντέλο και το μέγεθος των ασκήσεων, και βγαίνει μεγαλύτερη αν γίνεται ταυτόχρονα χρήση του Claude και αλλού." }));
+  } else if (st.provider !== "api") {
+    est.append(el("div", { class: "small muted", text: "Η εκτίμηση «πόσες εικόνες χωρούν ακόμη» εμφανίζεται μετά από μερικές αναγνώσεις (τουλάχιστον 3 εικόνες)." }));
+  }
+  // πίνακας κατανάλωσης
+  const cols = [["Αυτή η συνεδρία", st.session || {}], ["Σήμερα", st.today || {}], ["7 ημέρες", st.week || {}]];
+  const rows = [
+    ["Αναγνώσεις (κλήσεις)", (t) => nf0.format(t.calls || 0)],
+    ["Εικόνες", (t) => nf0.format(t.images || 0)],
+    ["Tokens εισόδου", (t) => nf0.format((t.input_tokens || 0) + (t.cache_read || 0) + (t.cache_write || 0))],
+    ["Tokens εξόδου", (t) => nf0.format(t.output_tokens || 0)],
+    ["Χρόνος ανάγνωσης", (t) => (t.seconds ? fmtDuration(t.seconds) : "—")],
+  ];
+  if (st.provider !== "api") rows.push(["Αντίστοιχο κόστος API*", (t) => usd.format(t.cost_usd || 0)]);
+  if (cols.some(([, t]) => t.errors)) rows.push(["Αποτυχίες", (t) => nf0.format(t.errors || 0)]);
+  const tbl = $("#usage-table");
+  tbl.innerHTML = "";
+  tbl.append(el("thead", {}, el("tr", {}, el("th", { text: "" }), ...cols.map(([h]) => el("th", { text: h })))),
+    el("tbody", {}, ...rows.map(([label, f]) => el("tr", {}, el("td", { text: label }), ...cols.map(([, t]) => el("td", { text: f(t) }))))));
+  const foot = [];
+  if (st.model) foot.push(`Μοντέλο τελευταίας ανάγνωσης: ${st.model}`);
+  if (st.updated_at && st.provider !== "api") {
+    const d = new Date(st.updated_at * 1000).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", hour12: false });
+    foot.push(`Όρια ενημερώθηκαν: ${d} (${fmtAgo(nowSec - st.updated_at)})`);
+  }
+  if (st.provider !== "api") foot.push("*Δεν χρεώνεται με τη συνδρομή — δείχνει τι θα κόστιζε με κλειδί API.");
+  $("#usage-foot").textContent = foot.join(" · ");
+  $("#usage-auto").checked = !!st.auto;
+  $("#usage-auto").disabled = st.provider === "api";
+  $("#usage-refresh").disabled = st.provider === "api" || usageBusy || !!st.refreshing;
+  $("#usage-refresh").textContent = usageBusy || st.refreshing ? "Ενημέρωση…" : "↻ Ανανέωση τώρα";
+}
+
+function renderUsage(st) {
+  if (!st) return;
+  S.usage = st;
+  renderUsageChip(st);
+  if (!$("#usage").hidden) renderUsageModal(st);
+}
+
+async function usageRefresh(manual) {
+  if (usageBusy) return;
+  usageBusy = true;
+  if (S.usage) renderUsage(S.usage);
+  let res;
+  try { res = await api.usage_refresh(); } catch (e) { res = { ok: false, error: String(e.message || e) }; }
+  usageBusy = false;
+  if (res.state) renderUsage(res.state); else if (S.usage) renderUsage(S.usage);
+  if (!res.ok && manual) toast(res.error || "Δεν ήρθαν στοιχεία χρήσης.", true, 6000);
+}
+
+async function usageInit() {
+  $("#usage-chip").onclick = () => { if (S.usage) renderUsageModal(S.usage); openModal("#usage");
+    if (S.usage && S.usage.provider !== "api" && (!S.usage.updated_at || Date.now() / 1000 - S.usage.updated_at > 1800)) usageRefresh(false); };
+  $("#usage-refresh").onclick = () => usageRefresh(true);
+  $("#usage-auto").onchange = async (e) => { S.app = await api.save_settings({ usage_check: e.target.checked }); if (S.usage) S.usage.auto = e.target.checked; };
+  let st;
+  try { st = await api.usage_state(); } catch (_) { return; }
+  renderUsage(st);
+  setInterval(() => { if (S.usage) renderUsage(S.usage); }, 60000);  // σχετικοί χρόνοι, μηδενισμοί
+  const stale = !st.updated_at || Date.now() / 1000 - st.updated_at > 600;
+  if (st.provider === "agent_sdk" && st.auto && stale) setTimeout(() => usageRefresh(false), 2500);
+}
+
+/* ================================================================== PDF: επιλογή σελίδων */
+const PDF_MAX = 60 * 1024 * 1024;
+const PDF = { queue: [], cur: null, sel: new Set() };
+const isPdfFile = (f) => !!f && (f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
+
+/** PDF από τον υπολογιστή (επιλογή αρχείου ή σύρσιμο). t = θέμα του διαγωνίσματος (αν ισχύει). */
+async function addPdfFile(file, t = null) {
+  if (file.size > PDF_MAX) { toast(`«${file.name}»: το PDF είναι πολύ μεγάλο (έως 60 MB).`, true); return; }
+  toast(`Άνοιγμα του «${file.name}»…`, false, 8000);
+  try {
+    const res = await api.add_pdf(await fileToDataUrl(file), file.name);
+    if (!res.ok) { toast(`${file.name}: ${res.error}`, true, 6000); return; }
+    toast(`«${file.name}»: διαλέξτε σελίδες`);
+    pdfEnqueue(res, t);
+  } catch (e) { toast(String(e.message || e), true); }
+}
+
+function onPhonePdf(data) {
+  S.phone.count++;
+  if ($("#phone-count")) $("#phone-count").textContent = S.phone.count;
+  toast(`📱 PDF «${data.name}» (${data.total} σελ.): διαλέξτε ποιες σελίδες θα μπουν`, false, 6000);
+  pdfEnqueue(data, null);
+  phoneSync();
+}
+
+function pdfEnqueue(doc, t) {
+  PDF.queue.push({ ...doc, t });
+  if (!PDF.cur || $("#pdfpick").hidden) pdfNext();  // (Esc κλείνει το παράθυρο = ακύρωση)
+}
+
+function pdfNext() {
+  PDF.cur = PDF.queue.shift() || null;
+  if (!PDF.cur) { $("#pdfpick").hidden = true; return; }
+  const d = PDF.cur;
+  const n = d.pages.length;
+  PDF.sel = new Set(n <= 10 ? d.pages.map((p) => p.n) : []);
+  $("#pdfpick-title").textContent = `📄 «${d.name}» — ${d.total} ${d.total === 1 ? "σελίδα" : "σελίδες"}`;
+  const corpus = S.mode === "corpus";
+  const dest = corpus ? phoneTargetLabel() : `Διαγώνισμα · ΘΕΜΑ ${LETTERS[d.t ?? S.target.t] || ""}`;
+  $("#pdfpick-dest").innerHTML = "";
+  $("#pdfpick-dest").append("Προορισμός: ", el("b", { text: dest }),
+    d.truncated ? el("span", { class: "warn-text", text: ` · Εμφανίζονται οι πρώτες ${n} σελίδες (όριο). Για τις υπόλοιπες, χωρίστε το PDF.` }) : "");
+  $("#pdfpick-range").value = "";
+  $("#pdfpick-join").checked = false;
+  $("#pdfpick-join-text").textContent = corpus
+    ? "Οι σελίδες είναι συνέχεια η μία της άλλης (ασκήσεις που περνούν στην επόμενη σελίδα)"
+    : "Όλες οι επιλεγμένες σελίδες είναι μία άσκηση (η ίδια άσκηση συνεχίζει)";
+  $("#pdfpick-note").textContent = corpus
+    ? "Κάθε σελίδα διαβάζεται χωριστά και μπορεί να έχει πολλές ασκήσεις. Η «Συνέχεια» ορίζεται και αργότερα σε κάθε σελίδα, με το κουμπί «⤒ Συνέχεια»."
+    : "Στο διαγώνισμα κάθε σελίδα γίνεται μία άσκηση. Αν μια σελίδα έχει πολλές ασκήσεις, προτιμήστε screenshot μόνο της άσκησης (ή το Corpus, που τις διαβάζει όλες).";
+  pdfRender();
+  openModal("#pdfpick");
+}
+
+function pdfRender() {
+  const d = PDF.cur;
+  if (!d) return;
+  const grid = $("#pdfpick-grid");
+  grid.innerHTML = "";
+  for (const p of d.pages) {
+    const on = PDF.sel.has(p.n);
+    const card = el("div", { class: "pdfpage" + (on ? " on" : ""), role: "button", tabindex: 0, title: on ? "Επιλεγμένη — πατήστε για αφαίρεση" : "Πατήστε για επιλογή",
+      onclick: () => { if (PDF.sel.has(p.n)) PDF.sel.delete(p.n); else PDF.sel.add(p.n); $("#pdfpick-range").value = ""; pdfRender(); } },
+      el("img", { src: p.thumb, alt: `σελίδα ${p.n}` }),
+      el("button", { class: "zoom", title: "Μεγέθυνση", text: "🔍", onclick: async (ev) => {
+        ev.stopPropagation();
+        const r = await api.pdf_preview(d.pdf_id, p.n);
+        if (r.ok) lightbox(r.data_url); else toast(r.error, true);
+      } }),
+      el("div", { class: "pn" }, el("span", { text: `σελ. ${p.n}` }), el("span", { text: on ? "✓" : "" })));
+    grid.append(card);
+  }
+  const k = PDF.sel.size;
+  $("#pdfpick-info").textContent = `${k} από ${d.pages.length} επιλεγμένες`;
+  $("#pdfpick-ok").disabled = k === 0;
+  $("#pdfpick-ok").textContent = k === 1 ? "Προσθήκη 1 σελίδας" : `Προσθήκη ${k} σελίδων`;
+}
+
+/** «1-3, 5, 8-» → σύνολο αριθμών σελίδων (μέσα στο 1..max). */
+function parsePageRange(text, max) {
+  const out = new Set();
+  for (const part of String(text || "").split(/[,;\s]+/)) {
+    const m = part.match(/^(\d*)\s*[-–]\s*(\d*)$/) || part.match(/^(\d+)$/);
+    if (!m) continue;
+    let a = parseInt(m[1], 10), b = m[2] === undefined ? a : parseInt(m[2], 10);
+    if (isNaN(a)) a = 1;
+    if (isNaN(b)) b = max;
+    if (a > b) [a, b] = [b, a];
+    for (let i = Math.max(1, a); i <= Math.min(max, b); i++) out.add(i);
+  }
+  return out;
+}
+
+async function pdfConfirm() {
+  const d = PDF.cur;
+  if (!d || !PDF.sel.size) return;
+  const pages = [...PDF.sel].sort((a, b) => a - b);
+  const join = $("#pdfpick-join").checked;
+  $("#pdfpick-ok").disabled = true;
+  let res;
+  try { res = await api.pdf_take(d.pdf_id, pages); } catch (e) { res = { ok: false, error: String(e.message || e) }; }
+  if (!res.ok) { toast(res.error, true); $("#pdfpick-ok").disabled = false; return; }
+  if (S.mode === "corpus") {
+    const C = S.corpus;
+    const skipped = [];
+    let added = 0;
+    res.pages.forEach((p, i) => {
+      const dup = C.images.find((im) => im.dataUrl === p.data_url);
+      if (dup) { skipped.push(`σελ. ${p.n}`); return; }
+      C.images.push({ id: newId(), imageId: p.image_id, dataUrl: p.data_url, name: p.name, time: Date.now() + i,
+        join: join && added > 0, status: "new", error: null });
+      added++;
+    });
+    renderCorpusImages();
+    toast(skipped.length ? `Προστέθηκαν ${added} σελίδες· παραλείφθηκαν όσες υπήρχαν ήδη (${skipped.join(", ")}).`
+      : `Προστέθηκαν ${added} σελίδες από το «${d.name}».`, false, 5000);
+  } else {
+    const t = d.t ?? S.target.t;
+    if (!S.exam.themes[t]) { toast("Δεν βρέθηκε το θέμα του διαγωνίσματος.", true); return; }
+    for (let i = 0; i < res.pages.length; i++) {
+      const p = res.pages[i];
+      const e = join && i > 0 ? S.exam.themes[t].exercises.length - 1 : -1;
+      await addPageId(t, e, p.image_id, p.data_url);
+    }
+    toast(join ? `Μία άσκηση με ${res.pages.length} σελίδες στο ΘΕΜΑ ${LETTERS[t]}`
+      : `${res.pages.length} ${res.pages.length === 1 ? "νέα άσκηση" : "νέες ασκήσεις"} στο ΘΕΜΑ ${LETTERS[t]}`, false, 5000);
+  }
+  pdfNext();
+}
+
+function pdfCancel() {
+  pdfNext();
+}
+
+function initPdfPick() {
+  $("#pdfpick-all").onclick = () => { PDF.sel = new Set(PDF.cur.pages.map((p) => p.n)); $("#pdfpick-range").value = ""; pdfRender(); };
+  $("#pdfpick-none").onclick = () => { PDF.sel = new Set(); $("#pdfpick-range").value = ""; pdfRender(); };
+  $("#pdfpick-range").oninput = (e) => {
+    if (!PDF.cur) return;
+    if (!e.target.value.trim()) return;
+    PDF.sel = parsePageRange(e.target.value, PDF.cur.pages.length);
+    const v = e.target.value; pdfRender(); $("#pdfpick-range").value = v;
+    const first = $("#pdfpick-grid .pdfpage.on");
+    if (first) first.scrollIntoView({ block: "nearest" });
+  };
+  $("#pdfpick-ok").onclick = pdfConfirm;
+  $("#pdfpick-cancel").onclick = pdfCancel;
+  $("#pdfpick-x").onclick = pdfCancel;
+  // κλικ έξω από το παράθυρο ή Esc = ακύρωση αυτού του PDF (και εμφάνιση του επόμενου, αν περιμένει)
+  $("#pdfpick").addEventListener("click", (e) => { if (e.target === $("#pdfpick")) setTimeout(pdfCancel, 0); });
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !PDF.cur || $("#pdfpick").hidden) return;
+    if (!$("#lightbox").hidden) {  // πρώτα κλείνει μόνο η μεγέθυνση
+      $("#lightbox").hidden = true; e.stopImmediatePropagation(); e.preventDefault(); return;
+    }
+    setTimeout(pdfCancel, 0);
+  }, true);
+}
+
 /** Ζώνη εικόνων: σύρσιμο, κλικ για επιλογή αρχείου, και στόχος για Ctrl+V. */
 function dropZone(tIdx, eIdx, label, hint) {
-  const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true,
+  const input = el("input", { type: "file", accept: "image/*,application/pdf,.pdf", multiple: true, hidden: true,
     onchange: async (ev) => { await addFiles(tIdx, eIdx, ev.target.files); ev.target.value = ""; } });
   const active = isTarget(tIdx, eIdx);
   const drop = el("div", { class: "drop" + (active ? " active" : ""), tabindex: 0,
@@ -439,8 +831,11 @@ function renderThemes() {
 }
 
 async function addFiles(tIdx, eIdx, files) {
-  const list = Array.from(files || []).filter((f) => f.type.startsWith("image/"));
-  if (!list.length) { toast("Επιλέξτε αρχεία εικόνας (PNG, JPG).", true); return; }
+  const all = Array.from(files || []);
+  const pdfs = all.filter(isPdfFile);
+  const list = all.filter((f) => f.type.startsWith("image/"));
+  if (!list.length && !pdfs.length) { toast("Επιλέξτε αρχεία εικόνας (PNG, JPG) ή PDF.", true); return; }
+  for (const f of pdfs) await addPdfFile(f, tIdx);
   for (const f of list) {
     await addPage(tIdx, eIdx, await fileToDataUrl(f));
     // πολλά αρχεία σε «νέα άσκηση»: το πρώτο φτιάχνει την άσκηση, τα υπόλοιπα γίνονται συνέχειά της
@@ -1067,6 +1462,7 @@ async function saveSettings(close = true) {
   fillSettings();
   if (close) $("#settings").hidden = true;
   if ($("#tab-review").classList.contains("active")) renderReview();
+  api.usage_state().then(renderUsage).catch(() => {});  // π.χ. αλλαγή συνδρομή ↔ κλειδί API
 }
 
 function updateTemplateHint() {
@@ -1149,14 +1545,14 @@ async function showAbout() {
   const kv = $("#about-kv");
   kv.innerHTML = "";
   for (const [k, v] of rows) kv.append(el("span", { text: k }), el("span", { text: v }));
-  $("#about-changelog").innerHTML = marked.parse(a.changelog || "_Δεν βρέθηκε το ιστορικό αλλαγών._");
+  $("#about-changelog").innerHTML = safeMarkdown(a.changelog || "_Δεν βρέθηκε το ιστορικό αλλαγών._");
   $("#about-update").innerHTML = "";
   openModal("#about");
 }
 
 async function showGuide() {
   const a = await loadAbout();
-  $("#guide-body").innerHTML = marked.parse(a.guide || "_Δεν βρέθηκε ο οδηγός χρήσης._");
+  $("#guide-body").innerHTML = safeMarkdown(a.guide || "_Δεν βρέθηκε ο οδηγός χρήσης._");
   openModal("#guide");
 }
 
@@ -1187,7 +1583,7 @@ function updateCard(r) {
   const size = r.size ? ` · ${(r.size / 1048576).toFixed(0)} MB` : "";
   return el("div", { class: "update-card" },
     el("h3", { text: `Νέα έκδοση ${r.latest}` + (r.published ? ` (${r.published})` : "") }),
-    el("div", { class: "notes-md", html: marked.parse(r.notes || "") }),
+    el("div", { class: "notes-md", html: safeMarkdown(r.notes || "") }),
     el("div", { class: "row" },
       r.url ? el("button", { class: "btn primary", text: `Λήψη και εγκατάσταση${size}`, onclick: () => installUpdate(r) })
         : el("span", { class: "muted small", text: "Η έκδοση δεν έχει ακόμα αρχείο εγκατάστασης. Δοκιμάστε σε λίγα λεπτά." }),
@@ -1210,7 +1606,8 @@ async function installUpdate(r) {
   if (!confirm(`Θα κατέβει και θα εγκατασταθεί η έκδοση ${r.latest}. Η εφαρμογή θα κλείσει και θα ξανανοίξει μόνη της. Βεβαιωθείτε ότι δεν έχετε αποθηκευμένη δουλειά στην οθόνη. Συνέχεια;`)) return;
   const p = $("#upd-progress");
   if (p) p.hidden = false;
-  await api.install_update(r.url);
+  const res = await api.install_update(r.url);
+  if (res && res.ok === false) { if (p) p.hidden = true; toast(res.error, true, 6000); }
 }
 
 function onUpdateProgress(d) {
@@ -1322,10 +1719,10 @@ function renderCorpus() {
 
 /* ---------- εικόνες */
 function corpusDrop() {
-  const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true,
+  const input = el("input", { type: "file", accept: "image/*,application/pdf,.pdf", multiple: true, hidden: true,
     onchange: async (ev) => { await corpusAddFiles(ev.target.files); ev.target.value = ""; } });
   const drop = el("div", { class: "drop active", tabindex: 0, onclick: () => input.click() },
-    el("div", { class: "drop-title", text: "Σύρετε εδώ όσες εικόνες θέλετε (φωτογραφίες ή screenshots)" }),
+    el("div", { class: "drop-title", text: "Σύρετε εδώ όσες εικόνες θέλετε (φωτογραφίες, screenshots ή PDF)" }),
     el("div", { class: "small", text: "ή πατήστε για επιλογή αρχείων · Ctrl+V για επικόλληση screenshot" }));
   drop.addEventListener("dragover", (ev) => { ev.preventDefault(); drop.classList.add("over"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
@@ -1338,8 +1735,12 @@ const stemOf = (n) => String(n || "").replace(/\.[A-Za-z0-9]{2,5}$/, "");
 const natCmp = (a, b) => stemOf(a).localeCompare(stemOf(b), undefined, { numeric: true, sensitivity: "base" });
 
 async function corpusAddFiles(files, fromPaste = false) {
-  const list = Array.from(files || []).filter((f) => f.type.startsWith("image/"));
-  if (!list.length) { toast("Επιλέξτε αρχεία εικόνας (PNG, JPG).", true); return; }
+  const all = Array.from(files || []);
+  const pdfs = all.filter(isPdfFile);
+  const list = all.filter((f) => f.type.startsWith("image/"));
+  if (!list.length && !pdfs.length) { toast("Επιλέξτε αρχεία εικόνας (PNG, JPG) ή PDF.", true); return; }
+  for (const f of pdfs) await addPdfFile(f);
+  if (!list.length) return;
   if (!fromPaste) list.sort((a, b) => natCmp(a.name, b.name));
   const skipped = [];
   let added = 0;
@@ -2470,9 +2871,11 @@ async function main() {
   for (const b of $$("#steps button")) b.onclick = () => { if (b.dataset.tab === "done") renderDone(); switchTab(b.dataset.tab); };
   bindSettings();
   bindCorpus();
+  initPdfPick();
   updateTemplateHint();
   await setThemeCount(+$("#f-nthemes").value);
   if (s.check_updates) setTimeout(() => checkUpdates(false), 1500);
+  usageInit();
 }
 
 window.addEventListener("DOMContentLoaded", () => {

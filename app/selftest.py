@@ -216,6 +216,51 @@ def run(report_path: str | None = None) -> int:
 
     check("phone", phone)
 
+    def pdf():
+        import io
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+
+        from .pdf_pages import render
+
+        buf = io.BytesIO()
+        with PdfPages(buf) as pdfp:
+            for k in (1, 2):
+                fig = plt.figure(figsize=(8.27, 11.69))
+                fig.text(0.1, 0.9, f"{k}. Να λύσετε την εξίσωση $x^2-{k}=0$.", fontsize=16)
+                pdfp.savefig(fig)
+                plt.close(fig)
+        doc = render(buf.getvalue())
+        if doc.total != 2 or len(doc.pages) != 2:
+            raise RuntimeError(f"σελίδες: {doc.total}")
+        im = doc.pages[0]
+        if max(im.size) != 2000 or im.convert("L").getextrema()[0] > 100:
+            raise RuntimeError(f"λάθος απόδοση σελίδας: {im.size}")
+        return f"2 σελίδες, {im.size[0]}×{im.size[1]} px"
+
+    check("pdf", pdf)
+
+    def usage():
+        from .usage import UsageTracker
+
+        raw = {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": 0.25, "resetsAt": 1793217000},
+                                                       "seven_day": {"utilization": 0.72, "resetsAt": 1793286000}}}
+        with tempfile.TemporaryDirectory() as td:
+            t = UsageTracker(Path(td) / "usage.json")
+            t.record_limits(raw)
+            t.record_result(images=1, usage={"input_tokens": 5, "output_tokens": 50}, cost_usd=0.01)
+            snap = UsageTracker(Path(td) / "usage.json").snapshot()
+        w = (snap.get("limits") or {}).get("windows") or {}
+        if w.get("five_hour", {}).get("utilization") != 0.25 or snap["today"]["images"] != 1:
+            raise RuntimeError(f"λάθος ανάγνωση χρήσης: {snap}")
+        return "όρια 5ώρου/εβδομάδας OK, αποθήκευση OK"
+
+    check("usage", usage)
+
     lines.append("RESULT: " + ("PASS" if ok else "FAIL"))
     text = "\n".join(lines)
     if report_path:

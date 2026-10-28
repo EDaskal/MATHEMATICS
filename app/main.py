@@ -84,16 +84,30 @@ class _Handler(BaseHTTPRequestHandler):
                  ".json": "application/json; charset=utf-8"}
         self._send(200, target.read_bytes(), types.get(target.suffix, "application/octet-stream"))
 
+    def _local_host(self) -> bool:
+        """Άμυνα σε «DNS rebinding»: δεχόμαστε μόνο αιτήματα με διεύθυνση 127.0.0.1 / localhost."""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return host in ("127.0.0.1", "localhost", "::1")
+
     def do_POST(self):  # noqa: N802
-        if not self.path.startswith("/api/"):
+        if not self.path.startswith("/api/") or not self._local_host():
             return self._send(404, b"not found", "text/plain")
-        if self.token and not secrets.compare_digest(self.headers.get("X-Api-Token") or "", self.token):
+        # 1) μυστικό κλειδί της συνεδρίας (το ξέρει μόνο η οθόνη της εφαρμογής)·
+        # 2) Content-Type JSON: μια ξένη ιστοσελίδα δεν μπορεί να το στείλει χωρίς έλεγχο CORS (που απορρίπτεται)
+        if not self.token or not secrets.compare_digest(self.headers.get("X-Api-Token") or "", self.token):
             return self._send(403, b"forbidden", "text/plain")
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+            return self._send(415, b"unsupported media type", "text/plain")
         name = self.path[len("/api/"):]
-        length = int(self.headers.get("Content-Length") or 0)
-        args = json.loads(self.rfile.read(length) or b"[]")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            args = json.loads(self.rfile.read(length) or b"[]")
+        except (ValueError, UnicodeDecodeError):
+            return self._send(400, b"bad request", "text/plain")
+        if not isinstance(args, list):
+            return self._send(400, b"bad request", "text/plain")
         fn = getattr(self.api, name, None)
-        if name.startswith("__") or not callable(fn):
+        if not name.isidentifier() or name.startswith("_") or not callable(fn):  # μόνο δημόσιες μέθοδοι
             return self._send(404, b"no such method", "text/plain")
         try:
             result = fn(*args)
@@ -105,8 +119,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 def run_browser(api: Api, port: int = 8765, open_browser: bool = True) -> None:
     _Handler.api = api
+    _Handler.token = secrets.token_urlsafe(16)  # και στη λειτουργία browser: χωρίς το κλειδί, καμία κλήση /api/
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
-    url = f"http://127.0.0.1:{port}/index.html"
+    url = f"http://127.0.0.1:{port}/index.html?v={__version__}&k={_Handler.token}"
     print(f"{APP_TITLE}: {url}", flush=True)
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

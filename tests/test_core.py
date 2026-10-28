@@ -459,8 +459,19 @@ def test_ui_server_no_store_and_token(tmp_path, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:  # χωρίς κλειδί: απαγορεύεται
         urllib.request.urlopen(urllib.request.Request(base + "/api/get_state", data=b"[]", method="POST"))
     assert e.value.code == 403
-    req = urllib.request.Request(base + "/api/get_state", data=b"[]", method="POST", headers={"X-Api-Token": token})
+    req = urllib.request.Request(base + "/api/get_state", data=b"[]", method="POST",
+                                 headers={"X-Api-Token": token, "Content-Type": "application/json"})
     assert json.loads(urllib.request.urlopen(req).read())["result"]["version"] == __version__
+    # 1.7.1: άμυνα σε ξένες ιστοσελίδες (CSRF / DNS rebinding) και σε ιδιωτικές μεθόδους
+    for headers, path, code in (
+        ({"X-Api-Token": token, "Content-Type": "text/plain"}, "/api/get_state", 415),
+        ({"X-Api-Token": token, "Content-Type": "application/json", "Host": "evil.example:80"}, "/api/get_state", 404),
+        ({"X-Api-Token": token, "Content-Type": "application/json"}, "/api/_open_pdf", 404),
+        ({"X-Api-Token": token, "Content-Type": "application/json"}, "/api/__init__", 404),
+    ):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(urllib.request.Request(base + path, data=b"[]", method="POST", headers=headers))
+        assert e.value.code == code, (headers, path)
 
 
 # ------------------------------------------------------------------ 1.4.3: σωστή κάρτα δικτύου για το QR
@@ -735,3 +746,210 @@ def test_exercise_without_stem_is_kept(tmp_path):
     assert info["removed_placeholders"] == 0 and info["labels"] == ["4."]
     assert [e["label"] for e in index_of(doc)["exercises"]] == ["1.", "2.", "3.", "4."]
     assert {h["title"]: h["exercises"] for h in outline_of(doc)}["ΕΞΙΣΩΣΗ ΕΥΘΕΙΑΣ"] == 4
+
+
+def _sample_pdf(pages: int = 3) -> bytes:
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        for k in range(1, pages + 1):
+            fig = plt.figure(figsize=(8.27, 11.69))
+            fig.text(0.1, 0.9, f"{k}. Να λύσετε την εξίσωση $x^2-{k}=0$.", fontsize=16)
+            pdf.savefig(fig)
+            plt.close(fig)
+    return buf.getvalue()
+
+
+def test_pdf_render_pages_and_errors():
+    from app.pdf_pages import PdfError, render
+
+    doc = render(_sample_pdf(3))
+    assert doc.total == 3 and len(doc.pages) == 3 and not doc.truncated
+    assert all(max(im.size) == 2000 for im in doc.pages)
+    assert doc.pages[0].convert("L").getextrema()[0] < 100  # υπάρχει κείμενο (σκούρα pixels)
+    part = render(_sample_pdf(3), max_pages=2)
+    assert part.total == 3 and len(part.pages) == 2 and part.truncated
+    for bad, msg in ((b"", "κενό"), (b"GIF89a....", "δεν είναι PDF"), (b"%PDF-1.4\ngarbage", "δεν ανοίγει")):
+        with pytest.raises(PdfError, match=msg):
+            render(bad)
+
+
+def test_phone_server_pdf_upload():
+    import urllib.parse
+    import urllib.request
+
+    from app.phone import PhoneServer
+
+    got = []
+    srv = PhoneServer(lambda *a: {"ok": True}, lambda raw, name: (got.append((name, raw[:5])) or {"ok": True, "pages": 3}))
+    port = srv.start(port=0)
+    try:
+        base = f"http://127.0.0.1:{port}/m/{srv.token}"
+
+        def post(body: bytes, name: str):
+            req = urllib.request.Request(base + "/upload-pdf", data=body, method="POST",
+                                         headers={"Content-Type": "application/pdf",
+                                                  "X-File-Name": urllib.parse.quote(name)})
+            return json.loads(urllib.request.urlopen(req).read())
+
+        res = post(_sample_pdf(1), "Ασκήσεις κεφ. 2.pdf")
+        assert res["ok"] and res["pages"] == 3 and res["count"] == 1
+        assert got == [("Ασκήσεις κεφ. 2.pdf", b"%PDF-")]
+        with pytest.raises(urllib.error.HTTPError) as e:  # όχι PDF → 400, δεν φτάνει στην εφαρμογή
+            post(b"\x89PNG\r\n\x1a\n" + b"0" * 100, "x.pdf")
+        assert e.value.code == 400 and len(got) == 1
+        with pytest.raises(urllib.error.HTTPError) as e:  # λάθος κλειδί → 404
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/m/wrong/upload-pdf",
+                                                          data=b"%PDF-1.4", method="POST"))
+        assert e.value.code == 404
+    finally:
+        srv.stop()
+
+
+def test_bridge_pdf_open_and_take(tmp_path, monkeypatch):
+    import base64
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    from app.bridge import Api
+
+    api = Api()
+    events = []
+    api.emit = lambda name, data: events.append((name, data))
+    res = api.add_pdf("data:application/pdf;base64," + base64.b64encode(_sample_pdf(3)).decode(), "Φυλλάδιο.pdf")
+    assert res["ok"] and res["total"] == 3 and [p["n"] for p in res["pages"]] == [1, 2, 3]
+    assert res["pages"][0]["thumb"].startswith("data:image/jpeg;base64,")
+    took = api.pdf_take(res["pdf_id"], [3, 1, 99])
+    assert took["ok"] and [p["n"] for p in took["pages"]] == [3, 1]
+    assert took["pages"][0]["name"] == "Φυλλάδιο.pdf — σελ. 3"
+    assert all(p["image_id"] in api._images for p in took["pages"])
+    assert api.pdf_preview(res["pdf_id"], 2)["ok"] and not api.pdf_preview(res["pdf_id"], 9)["ok"]
+    assert not api.pdf_take("άγνωστο", [1])["ok"]
+    assert not api.add_pdf("data:application/pdf;base64," + base64.b64encode(b"not a pdf").decode(), "x.pdf")["ok"]
+    # από το κινητό: γεγονός «phone_pdf» με τις μικρογραφίες
+    ph = api._phone_pdf(_sample_pdf(2), "kinito.pdf")
+    assert ph == {"ok": True, "pages": 2, "shown": 2}
+    assert events and events[-1][0] == "phone_pdf" and events[-1][1]["name"] == "kinito.pdf"
+
+
+def test_update_only_from_own_github_releases(tmp_path, monkeypatch):
+    from app.updates import is_release_asset
+
+    repo = "EDaskal/MATHEMATICS"
+    ok = "https://github.com/EDaskal/MATHEMATICS/releases/download/v1.7.1/Diagonismata-Setup-1.7.1.exe"
+    assert is_release_asset(ok, repo)
+    for bad in ("http://github.com/EDaskal/MATHEMATICS/releases/download/v1/x.exe",
+                "https://github.com.evil.com/EDaskal/MATHEMATICS/releases/download/v1/x.exe",
+                "https://evil.com/EDaskal/MATHEMATICS/releases/download/v1/x.exe",
+                "https://github.com/Other/MATHEMATICS/releases/download/v1/x.exe",
+                "https://github.com/EDaskal/MATHEMATICS/releases/download/v1/x.zip",
+                "https://user@github.com/EDaskal/MATHEMATICS/releases/download/v1/x.exe",
+                "https://github.com/EDaskal/MATHEMATICS/releases/download/../../x.exe"):
+        assert not is_release_asset(bad, repo), bad
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from app.bridge import Api
+
+    api = Api()
+    started = []
+    monkeypatch.setattr(api, "_update_worker", lambda url: started.append(url))
+    assert not api.install_update("https://evil.com/x.exe")["ok"]  # χωρίς προηγούμενο έλεγχο: τίποτα
+    api._update_url = ok
+    assert api.install_update("https://evil.com/x.exe")["ok"]  # αγνοεί τη διεύθυνση της οθόνης
+    import time
+
+    time.sleep(0.2)
+    assert started == [ok]
+
+
+def test_open_file_only_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from app import bridge
+
+    opened = []
+    monkeypatch.setattr(bridge, "open_path", lambda p: opened.append(str(p)))
+    api = bridge.Api()
+    doc = tmp_path / "Διαγώνισμα.docx"
+    doc.write_bytes(b"x")
+    exe = tmp_path / "evil.exe"
+    exe.write_bytes(b"MZ")
+    assert api.open_file(str(doc))["ok"]
+    assert not api.open_file(str(exe))["ok"]
+    assert not api.open_file(str(tmp_path / "missing.docx"))["ok"]
+    assert not api.open_file("https://evil.example/a.docx")["ok"]
+    assert api.open_folder(str(doc))["ok"]  # ο φάκελος του αρχείου
+    assert opened == [str(doc.resolve()), str(tmp_path.resolve())]
+
+
+# ------------------------------------------------------------------ 1.7.2: χρήση συνδρομής Claude
+
+RATE_RAW = {"status": "allowed_warning", "resetsAt": 1793286000, "rateLimitType": "seven_day", "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled", "isUsingOverage": False,
+            "unifiedWindows": {"five_hour": {"utilization": 0.25, "resetsAt": 1793217000},
+                               "seven_day": {"utilization": 0.72, "resetsAt": 1793286000}}}
+
+
+def test_usage_parse_and_persist(tmp_path):
+    from app.usage import UsageTracker, parse_limits
+
+    lim = parse_limits(RATE_RAW)
+    assert lim["status"] == "allowed_warning" and lim["limit_type"] == "seven_day"
+    assert lim["windows"]["five_hour"] == {"utilization": 0.25, "resets_at": 1793217000}
+    assert parse_limits({"weird": 1})["windows"] == {} and parse_limits(None)["status"] == ""  # ανεκτικό
+    t = UsageTracker(tmp_path / "usage.json")
+    seen = []
+    t.on_change = seen.append
+    t.record_limits(RATE_RAW)
+    t.record_result(images=2, usage={"input_tokens": 10, "output_tokens": 500, "cache_read_input_tokens": 6000},
+                    cost_usd=0.02, seconds=4.2, model="claude-opus-5-5")
+    snap = t.snapshot()
+    assert snap["session"]["images"] == 2 and snap["today"]["output_tokens"] == 500 and snap["week"]["calls"] == 1
+    assert snap["model"] == "claude-opus-5-5" and len(seen) == 2
+    t2 = UsageTracker(tmp_path / "usage.json")  # νέο άνοιγμα της εφαρμογής: τα όρια και το «σήμερα» μένουν
+    s2 = t2.snapshot()
+    assert s2["limits"]["windows"]["seven_day"]["utilization"] == 0.72 and s2["today"]["images"] == 2
+    assert s2["session"]["calls"] == 0
+    assert "Ξαναδουλεύει" in t2.limit_message()
+
+
+def test_usage_estimate_per_image(tmp_path):
+    from app.usage import UsageTracker
+
+    t = UsageTracker(tmp_path / "u.json")
+
+    def lim(u, reset=1000):
+        return {"status": "allowed", "unifiedWindows": {"five_hour": {"utilization": u, "resetsAt": reset}}}
+
+    t.record_limits(lim(0.10))  # βάση
+    for _ in range(4):
+        t.record_result(images=1)
+    t.record_limits(lim(0.11))
+    assert t.per_image is None  # μόλις 1% αλλαγή: όχι ακόμα εκτίμηση
+    t.record_limits(lim(0.14))
+    assert abs(t.per_image - 0.01) < 1e-9 and t.per_image_samples == 4  # 4% σε 4 εικόνες
+    t.record_limits(lim(0.02, reset=2000))  # νέο 5ωρο: νέα βάση, η εκτίμηση μένει
+    assert abs(t.per_image - 0.01) < 1e-9
+
+
+def test_bridge_usage_state_and_api_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from app import usage
+    from app.bridge import Api
+
+    monkeypatch.setattr(usage, "tracker", usage.UsageTracker(tmp_path / "usage.json"))
+    import app.bridge as br
+
+    api = Api()
+    usage.tracker.on_change = lambda snap: None
+    st = api.usage_state()
+    assert st["provider"] == "agent_sdk" and st["auto"] is True and st["limits"] is None
+    api._settings.provider = "api"
+    r = api.usage_refresh()
+    assert not r["ok"] and "συνδρομή" in r["error"]
+    assert br is not None
