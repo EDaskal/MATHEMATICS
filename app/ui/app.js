@@ -412,7 +412,8 @@ const usd = new Intl.NumberFormat("el-GR", { style: "currency", currency: "USD",
 /** Ποσοστό χρήσης ενός παραθύρου τώρα· αν πέρασε η ώρα μηδενισμού, θεωρείται 0. */
 function usageNow(w, nowSec) {
   const reset = w.resets_at && w.resets_at <= nowSec;
-  return { pct: reset ? 0 : Math.round((w.utilization || 0) * 100), reset };
+  // πάνω από 100% (π.χ. 1,02) σημαίνει ότι το όριο έχει ήδη εξαντληθεί: εμφανίζεται 100%
+  return { pct: reset ? 0 : Math.min(100, Math.round((w.utilization || 0) * 100)), reset };
 }
 function usageLevel(pct) { return pct >= 90 ? "high" : pct >= 70 ? "mid" : ""; }
 function usageBar(pct) {
@@ -1822,6 +1823,10 @@ function renderCorpusImages() {
         el("div", { class: "spacer" }),
         i > 0 ? el("button", { class: im.join ? "on" : "", title: "Η εικόνα είναι συνέχεια (επόμενη σελίδα) της προηγούμενης", text: "⤒ Συνέχεια",
           onclick: () => { corpusMarkChanged(im); corpusMarkChanged(C.images[i - 1]); im.join = !im.join; renderCorpus(); } }) : null,
+        size > 1 ? el("button", { class: "in-grp", title: "Μέσα στην ομάδα: η σελίδα πάει μία θέση νωρίτερα (η ομάδα θα ξαναδιαβαστεί)",
+          text: "‹", disabled: i === gs, onclick: () => corpusMoveInGroup(i, -1) }) : null,
+        size > 1 ? el("button", { class: "in-grp", title: "Μέσα στην ομάδα: η σελίδα πάει μία θέση αργότερα (η ομάδα θα ξαναδιαβαστεί)",
+          text: "›", disabled: i === ge - 1, onclick: () => corpusMoveInGroup(i, 1) }) : null,
         el("button", { title: `Πιο μπροστά: μετακινεί ${what}· προσπερνά ολόκληρες τις ομάδες`, text: "◀", disabled: g === 0,
           onclick: () => corpusMoveImage(i, -1) }),
         el("button", { title: `Πιο πίσω: μετακινεί ${what}· προσπερνά ολόκληρες τις ομάδες`, text: "▶", disabled: g === ranges.length - 1,
@@ -1852,6 +1857,30 @@ function corpusMoveImage(i, d) {
   first[0].join = false;
   corpusResort();
   renderCorpus();
+}
+
+/** ‹ ›: αλλαγή σειράς σελίδας ΜΟΝΟ μέσα στην ομάδα της (ποτέ έξω από αυτήν). Οι σελίδες μιας ομάδας
+ *  διαβάζονται μαζί και με τη σειρά τους, άρα αν η ομάδα έχει ήδη διαβαστεί, ξαναδιαβάζεται (με ερώτηση). */
+function corpusMoveInGroup(i, d) {
+  const C = S.corpus;
+  const imgs = C.images;
+  const r = corpusGroupRanges().find(([s, e]) => i >= s && i < e);
+  const j = i + d;
+  if (!r || r[1] - r[0] < 2 || j < r[0] || j >= r[1]) return;
+  const job = Object.values(C.jobs).find((jb) => jb.imageIds.includes(imgs[i].id));
+  if (job) {
+    const nEx = C.exs.filter((x) => x.jobId === job.id).length;
+    if (!confirm(`Η αλλαγή σειράς μέσα στην ομάδα σημαίνει ότι η ομάδα θα ξαναδιαβαστεί` +
+      (nEx === 1 ? " (η άσκησή της θα αφαιρεθεί μέχρι τη νέα ανάγνωση και τυχόν διορθώσεις σας σε αυτήν θα χαθούν)"
+        : nEx ? ` (οι ${nEx} ασκήσεις της θα αφαιρεθούν μέχρι τη νέα ανάγνωση και τυχόν διορθώσεις σας σε αυτές θα χαθούν)` : "") +
+      `. Συνέχεια;`)) return;
+    dropJob(job.id);
+  }
+  [imgs[i], imgs[j]] = [imgs[j], imgs[i]];
+  for (let k = r[0]; k < r[1]; k++) imgs[k].join = k > r[0];  // η ομάδα μένει ίδια, μόνο η σειρά αλλάζει
+  corpusResort();
+  renderCorpus();
+  if (job) toast("Η σειρά άλλαξε. Πατήστε «Μεταγραφή →» για να ξαναδιαβαστεί η ομάδα.", false, 5000);
 }
 
 function corpusRemoveImage(i) {
