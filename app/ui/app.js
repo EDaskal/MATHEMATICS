@@ -1657,7 +1657,7 @@ async function checkUpdates(manual = false) {
   try { r = await api.check_updates(); } catch (e) { r = { ok: false, error: String(e.message || e) }; }
   S.update = r;
   if (!r.ok) {
-    if (manual) $("#about-update").replaceChildren(el("div", { class: "error-box", text: r.error }));
+    if (manual) $("#about-update").replaceChildren(updateErrorBox(r));
     return;
   }
   if (r.newer) {
@@ -1667,6 +1667,30 @@ async function checkUpdates(manual = false) {
     $("#about-update").replaceChildren(el("div", { class: "okline", text: `✓ Έχετε την τελευταία έκδοση (${r.current}).` }));
   }
   void target;
+}
+
+function updateErrorBox(r) {
+  // 1.7.7: η πραγματική αιτία + λεπτομέρειες + χειροκίνητη λήψη από τη σελίδα του GitHub
+  const diag = el("div", { class: "small upd-diag", hidden: true });
+  const runDiag = async () => {
+    diag.hidden = false;
+    diag.replaceChildren(el("div", { class: "muted", text: "Δοκιμή σύνδεσης με κάθε τρόπο…" }));
+    let d;
+    try { d = await api.update_diagnose(); } catch (e) { d = { ok: false, error: String(e) }; }
+    const rows = (d.results || []).map((x) => el("div", {}, el("b", { text: (x.ok ? "✓ " : "✗ ") + x.method + ": " }), x.detail));
+    diag.replaceChildren(...[
+      r.detail ? el("div", { class: "muted", text: "Σφάλμα: " + r.detail }) : null,
+      ...rows,
+      d.ok === false ? el("div", { text: d.error || "" }) : null,
+      el("div", { class: "muted", text: "Στείλτε μια φωτογραφία αυτού του πλαισίου αν χρειαστείτε βοήθεια." })].filter(Boolean));
+  };
+  return el("div", { class: "error-box" },
+    el("div", { text: r.error }),
+    el("div", { class: "row upd-err-actions" },
+      el("button", { class: "btn small", text: "Άνοιγμα σελίδας λήψης", title: "Κατεβάστε και τρέξτε το Diagonismata-Setup από τη σελίδα του GitHub",
+        onclick: () => api.open_releases_page() }),
+      el("button", { class: "btn small ghost", text: "Λεπτομέρειες", onclick: runDiag })),
+    diag);
 }
 
 function updateCard(r) {

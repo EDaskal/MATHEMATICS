@@ -285,6 +285,20 @@ def run(report_path: str | None = None) -> int:
 
     check("figure-check", figure_check)
 
+    def update_tls():
+        from .updates import _contexts
+
+        names = [n for n, _ in _contexts()]
+        if names[0] != "Windows" or "certifi" not in names:
+            raise RuntimeError(f"τρόποι επαλήθευσης: {names}")
+        import certifi
+
+        if not Path(certifi.where()).exists():
+            raise RuntimeError("λείπει το cacert.pem")
+        return "επαλήθευση HTTPS: " + " → ".join(names)
+
+    check("update-tls", update_tls)
+
     lines.append("RESULT: " + ("PASS" if ok else "FAIL"))
     text = "\n".join(lines)
     if report_path:

@@ -498,3 +498,5 @@ label.check.wrap > span { flex-basis: 100%; font-weight: 400; }
 .fig-add summary { cursor: pointer; }
 .fig-checked { margin-top: 6px; color: var(--ok, #2e7d32); }
 .fig-checked .muted { color: var(--muted, #777); }
+.upd-err-actions { margin-top: 8px; gap: 6px; flex-wrap: wrap; }
+.upd-diag { margin-top: 8px; display: grid; gap: 3px; word-break: break-word; }

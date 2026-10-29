@@ -25,7 +25,14 @@ UA = f"Diagonismata/{__version__}"
 
 
 class UpdateError(RuntimeError):
-    pass
+    """Σφάλμα με μήνυμα για τον χρήστη· `detail` = τεχνικές λεπτομέρειες (για το «Λεπτομέρειες»)."""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = detail
+
+
+RELEASES_PAGE = "https://github.com/{repo}/releases/latest"
 
 
 def parse_version(text: str) -> tuple[int, ...]:
@@ -38,10 +45,102 @@ def is_newer(latest: str, current: str = __version__) -> bool:
     return parse_version(latest) > parse_version(current)
 
 
+# --------------------------------------------------------------------------- σύνδεση
+
+def _contexts() -> list:
+    """Τρόποι επαλήθευσης της ασφαλούς σύνδεσης, με σειρά προτίμησης (1.7.7):
+
+    1. **Windows** (`truststore`): ο ίδιος έλεγχος με τον Edge. Τα Windows κατεβάζουν μόνα τους
+       πιστοποιητικά-ρίζες που λείπουν και εμπιστεύονται ό,τι έχει εγκρίνει ο υπολογιστής (π.χ. antivirus).
+    2. **Python**: τα πιστοποιητικά που είναι ήδη αποθηκευμένα στα Windows (ο μόνος τρόπος ως την 1.7.6 —
+       αποτύγχανε όταν έλειπε η ρίζα του GitHub από τον υπολογιστή).
+    3. **certifi**: η λίστα πιστοποιητικών που έχει μέσα της η εφαρμογή (της Mozilla)."""
+    import ssl
+
+    out = []
+    try:
+        import truststore
+
+        out.append(("Windows", truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)))
+    except Exception:  # noqa: BLE001 — λείπει ή δεν υποστηρίζεται
+        pass
+    out.append(("Python", ssl.create_default_context()))
+    try:
+        import certifi
+
+        out.append(("certifi", ssl.create_default_context(cafile=certifi.where())))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _reason(exc: BaseException) -> BaseException:
+    r = getattr(exc, "reason", None)
+    return r if isinstance(r, BaseException) else exc
+
+
+def _is_tls(exc: BaseException) -> bool:
+    import ssl
+
+    r = _reason(exc)
+    return isinstance(r, ssl.SSLError) or "CERTIFICATE" in str(r).upper() or "SSL" in type(r).__name__.upper()
+
+
+def _open(req, timeout: int):
+    """urlopen με διαδοχικούς τρόπους επαλήθευσης. Αλλάζουμε τρόπο μόνο όταν φταίει η ασφαλής σύνδεση
+    (πιστοποιητικό)· αν δεν υπάρχει δίκτυο ή μπλοκάρει firewall, οι άλλοι τρόποι δεν θα βοηθούσαν."""
+    tried, last = [], None
+    for name, ctx in _contexts():
+        try:
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)  # noqa: S310 — σταθερά https URL
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            tried.append(f"{name}: {type(_reason(exc)).__name__}: {_reason(exc)}")
+            last = exc
+            if not _is_tls(exc):
+                break
+    raise _explain(last, tried)
+
+
+def _explain(exc: BaseException | None, tried: list[str]) -> UpdateError:
+    """Κατανοητό μήνυμα για την πραγματική αιτία (πριν όλα έλεγαν «δεν υπάρχει σύνδεση»)."""
+    import socket
+    import ssl
+
+    r = _reason(exc) if exc is not None else None
+    text = str(r or "").lower()
+    detail = " | ".join(tried) or repr(exc)
+    if isinstance(r, ssl.SSLCertVerificationError) or "certificate verify failed" in text:
+        if "not yet valid" in text or "expired" in text:
+            msg = ("Η ημερομηνία ή η ώρα του υπολογιστή φαίνεται λάθος, γι' αυτό δεν επαληθεύεται η σύνδεση με το "
+                   "GitHub. Ρυθμίστε την ώρα (δεξί κλικ στο ρολόι → Ρύθμιση ημερομηνίας/ώρας → Συγχρονισμός τώρα).")
+        else:
+            msg = ("Δεν επαληθεύτηκε το πιστοποιητικό ασφαλείας του GitHub. Συνήθως φταίει antivirus που ελέγχει "
+                   "τις ασφαλείς συνδέσεις («HTTPS scanning» / «Web Shield»): προσθέστε το «Diagonismata» στις εξαιρέσεις του.")
+    elif isinstance(r, ssl.SSLError):
+        msg = ("Η ασφαλής σύνδεση με το GitHub διακόπηκε. Πιθανότατα την εμποδίζει antivirus ή firewall· "
+               "προσθέστε το «Diagonismata» στις εξαιρέσεις του.")
+    elif isinstance(r, socket.gaierror):
+        msg = "Δεν βρέθηκε το GitHub: ο υπολογιστής δεν έχει internet ή υπάρχει πρόβλημα DNS."
+    elif isinstance(r, (TimeoutError, socket.timeout)) or "timed out" in text:
+        msg = ("Το GitHub δεν απάντησε εγκαίρως. Ίσως το internet είναι αργό ή κάποιο firewall κρατά τη σύνδεση· "
+               "δοκιμάστε ξανά σε λίγο.")
+    elif "proxy" in text or "407" in text:
+        msg = "Η σύνδεση περνά από proxy που δεν την επέτρεψε. Ελέγξτε τις ρυθμίσεις proxy των Windows."
+    elif isinstance(r, (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError, PermissionError)) \
+            or "10013" in text or "forbidden by its access permissions" in text:
+        msg = ("Η σύνδεση μπλοκαρίστηκε, πιθανότατα από firewall ή antivirus. Επιτρέψτε στο «Diagonismata» την "
+               "πρόσβαση στο internet και δοκιμάστε ξανά.")
+    else:
+        msg = "Δεν υπάρχει σύνδεση με το GitHub (internet)."
+    return UpdateError(msg, detail)
+
+
 def _get_json(url: str, timeout: int = 10) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — σταθερό https URL
+        with _open(req, timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
@@ -49,8 +148,25 @@ def _get_json(url: str, timeout: int = 10) -> dict:
         if exc.code == 403:
             raise UpdateError("Το GitHub περιόρισε προσωρινά τους ελέγχους. Δοκιμάστε αργότερα.") from exc
         raise UpdateError(f"Σφάλμα GitHub ({exc.code}).") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise UpdateError("Δεν υπάρχει σύνδεση με το GitHub (internet).") from exc
+    except ValueError as exc:
+        raise UpdateError("Μη αναμενόμενη απάντηση από το GitHub.", str(exc)) from exc
+
+
+def diagnose(repo: str) -> list[dict]:
+    """Δοκιμή σύνδεσης με κάθε τρόπο επαλήθευσης χωριστά (για το «Λεπτομέρειες» της οθόνης)."""
+    out = []
+    url = API.format(repo=repo)
+    for name, ctx in _contexts():
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"})
+        try:
+            with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:  # noqa: S310
+                out.append({"method": name, "ok": True, "detail": f"HTTP {resp.status}"})
+        except urllib.error.HTTPError as exc:
+            out.append({"method": name, "ok": exc.code != 404, "detail": f"HTTP {exc.code}"})
+        except Exception as exc:  # noqa: BLE001
+            r = _reason(exc)
+            out.append({"method": name, "ok": False, "detail": f"{type(r).__name__}: {r}"})
+    return out
 
 
 def check(repo: str, current: str = __version__) -> dict:
@@ -94,7 +210,7 @@ def download(url: str, progress: Callable[[int, int], None] | None = None) -> Pa
     dest = Path(tempfile.gettempdir()) / name
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as out:  # noqa: S310
+        with _open(req, 60) as resp, open(dest, "wb") as out:
             total = int(resp.headers.get("Content-Length") or 0)
             done = 0
             while True:
@@ -105,6 +221,8 @@ def download(url: str, progress: Callable[[int, int], None] | None = None) -> Pa
                 done += len(chunk)
                 if progress:
                     progress(done, total)
+    except UpdateError as exc:
+        raise UpdateError("Η λήψη απέτυχε. " + str(exc), exc.detail) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise UpdateError(f"Η λήψη απέτυχε: {exc}") from exc
     if total and dest.stat().st_size != total:

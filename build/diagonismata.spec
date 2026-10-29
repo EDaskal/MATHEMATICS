@@ -4,7 +4,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent  # noqa: F821 — ορίζεται από το PyInstaller
 
@@ -30,6 +30,8 @@ hiddenimports += ["matplotlib.backends.backend_svg", "matplotlib.backends.backen
 hiddenimports += collect_submodules("fontTools.ttLib.tables")  # πίνακες γραμματοσειρών (name, cmap, MATH) — δυναμική φόρτωση
 hiddenimports += collect_submodules("segno")  # QR code για το κινητό
 hiddenimports += ["olefile"]  # εξισώσεις MathType (έλεγχος ίδιων ασκήσεων)
+hiddenimports += collect_submodules("truststore") + ["certifi"]  # ενημερώσεις: HTTPS μέσω Windows + εφεδρικά πιστοποιητικά
+datas += collect_data_files("certifi")  # cacert.pem
 # PDF: pypdfium2 + pdfium.dll (pypdfium2_raw) — τα hooks του PyInstaller υπάρχουν, αλλά τα παίρνουμε ρητά
 for pkg in ("pypdfium2", "pypdfium2_raw"):
     d, b, h = collect_all(pkg)

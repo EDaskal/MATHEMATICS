@@ -1096,3 +1096,80 @@ def test_read_figure_from_solution():
     assert "το σχήμα της λύσης" in fp.calls[0]["text"] and fp.calls[0]["n"] == 2
     none = _FakeProvider([{"found": False, "crop_page": 0, "crop": [0, 0, 1, 1], "description": "", "why": "μόνο κείμενο"}])
     assert "Δεν βρέθηκε" in asyncio.run(read_figure(none, [_png()], "", "", "κ"))["error"]
+
+
+# ------------------------------------------------------------------ 1.7.7: έλεγχος ενημερώσεων σε κάθε υπολογιστή
+
+def test_update_contexts_prefer_windows_verification():
+    from app import updates
+
+    names = [n for n, _ in updates._contexts()]
+    assert names[0] == "Windows" and "Python" in names and names[-1] == "certifi"
+
+
+def test_update_errors_are_explained():
+    import socket
+    import ssl
+    import urllib.error
+
+    from app.updates import _explain
+
+    def msg(reason):
+        return str(_explain(urllib.error.URLError(reason), ["x"]))
+
+    cert = ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate")
+    assert "πιστοποιητικό" in msg(cert) and "antivirus" in msg(cert)
+    old = ssl.SSLCertVerificationError(1, "certificate verify failed: certificate has expired")
+    assert "ώρα" in msg(old)
+    assert "DNS" in msg(socket.gaierror(11001, "getaddrinfo failed"))
+    assert "εγκαίρως" in msg(TimeoutError("timed out"))
+    assert "firewall" in msg(PermissionError(10013, "An attempt was made to access a socket in a way forbidden by its access permissions"))
+    assert "internet" in msg(OSError("άγνωστο"))
+    e = _explain(urllib.error.URLError(cert), ["Windows: SSLError: x", "Python: SSLError: y"])
+    assert "Windows" in e.detail and "Python" in e.detail
+
+
+def test_update_open_falls_back_only_on_certificate_errors(monkeypatch):
+    import io
+    import socket
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    from app import updates
+
+    calls = []
+
+    def fake_urlopen(req, timeout=10, context=None):
+        calls.append(context)
+        if len(calls) == 1:
+            raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
+        return io.BytesIO(b'{"tag_name": "v9.9.9", "assets": []}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert updates.check("EDaskal/MATHEMATICS", "1.0.0")["latest"] == "9.9.9"
+    assert len(calls) == 2  # ο 1ος τρόπος απέτυχε στο πιστοποιητικό → δοκιμάστηκε ο 2ος
+
+    calls.clear()
+
+    def no_net(req, timeout=10, context=None):
+        calls.append(context)
+        raise urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_net)
+    with pytest.raises(updates.UpdateError) as ei:
+        updates.check("EDaskal/MATHEMATICS", "1.0.0")
+    assert len(calls) == 1 and "DNS" in str(ei.value)  # χωρίς δίκτυο δεν έχει νόημα να δοκιμάσει άλλο τρόπο
+
+
+def test_bridge_update_error_has_detail_and_page(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from app import updates
+    from app.bridge import Api
+
+    def boom(url, timeout=10):
+        raise updates.UpdateError("Δεν επαληθεύτηκε το πιστοποιητικό", "Windows: SSLError: x")
+
+    monkeypatch.setattr(updates, "_get_json", boom)
+    r = Api().check_updates()
+    assert r["ok"] is False and r["detail"].startswith("Windows") and r["page"].endswith("/releases/latest")

@@ -552,14 +552,38 @@ class Api:
     def check_updates(self) -> dict:
         from .updates import UpdateError, check
 
+        from .updates import RELEASES_PAGE
+
+        page = RELEASES_PAGE.format(repo=self._settings.update_repo)
         try:
             info = check(self._settings.update_repo, __version__)
             self._update_url = info.get("url") or ""  # μόνο αυτό το αρχείο μπορεί να εγκατασταθεί
             return {"ok": True, **info}
         except UpdateError as exc:
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": str(exc), "detail": exc.detail, "page": page}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"Αποτυχία ελέγχου: {exc}"}
+
+    def update_diagnose(self) -> dict:
+        """Δοκιμή σύνδεσης με το GitHub με κάθε τρόπο επαλήθευσης (για υποστήριξη)."""
+        from .updates import diagnose
+
+        try:
+            return {"ok": True, "results": diagnose(self._settings.update_repo)}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def open_releases_page(self) -> dict:
+        """Ανοίγει στον browser τη σελίδα λήψης της τελευταίας έκδοσης (μόνο αυτή τη διεύθυνση)."""
+        import webbrowser
+
+        from .updates import RELEASES_PAGE
+
+        repo = (self._settings.update_repo or "").strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            return {"ok": False, "error": "Μη έγκυρο αποθετήριο ενημερώσεων."}
+        webbrowser.open(RELEASES_PAGE.format(repo=repo))
+        return {"ok": True}
 
     def install_update(self, url: str = "") -> dict:
         """Κατεβάζει το νέο πρόγραμμα εγκατάστασης (γεγονότα «update_progress»), το τρέχει και κλείνει την εφαρμογή.
@@ -585,7 +609,7 @@ class Api:
             self.emit("update_progress", {"done": 1, "total": 1, "stage": "install"})
             launch_installer(path)
         except UpdateError as exc:
-            self.emit("update_progress", {"error": str(exc)})
+            self.emit("update_progress", {"error": str(exc) + (f" ({exc.detail})" if exc.detail else "")})
             return
         except Exception as exc:  # noqa: BLE001
             self.emit("update_progress", {"error": f"Αποτυχία ενημέρωσης: {exc}"})
