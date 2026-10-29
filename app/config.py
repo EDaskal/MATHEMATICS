@@ -62,6 +62,9 @@ class Settings:
     dup_check: str = "normal"
     # Ένδειξη χρήσης της συνδρομής: ανανέωση με το άνοιγμα της εφαρμογής (μία ελάχιστη κλήση)
     usage_check: bool = True
+    # Σχήματα: χρώματα όπως στο πρωτότυπο ή ασπρόμαυρα (original | bw) και δεύτερος έλεγχος με πλέγμα
+    figure_colors: str = "original"
+    figure_check: bool = True
 
     @classmethod
     def load(cls) -> "Settings":

@@ -13,7 +13,7 @@
             {"label": "α", "text": "Να βρείτε την ορίζουσα $D=\\begin{vmatrix} 1 & 1 \\\\ 1 & -1 \\end{vmatrix}$.", "choices": null, "items": []}
           ],
           "closing": "",
-          "figure_spec": "{\"width_cm\": 5, \"axes\": {\"x\": [-3, 3], \"y\": [-1, 5], \"ticks_x\": [-2, 2], \"ticks_y\": [4], \"labels\": true, \"origin\": \"O\"}, \"elements\": [{\"type\": \"line\", \"name\": \"ε\", \"through\": [[-2, 0], [0, 2]], \"label\": \"ε\"}, {\"type\": \"point\", \"name\": \"A\", \"at\": [1, 3], \"label\": \"A\"}], \"checks\": [{\"type\": \"on_line\", \"point\": \"A\", \"line\": \"ε\"}]}"
+          "figure_spec": "{\"width_cm\": 5, \"label_size\": 0.05, \"axes\": {\"x\": [-3, 3], \"y\": [-1, 5], \"ticks_x\": [-2, 2], \"ticks_y\": [4], \"labels\": true, \"origin\": \"O\"}, \"elements\": [{\"type\": \"line\", \"name\": \"ε\", \"through\": [[-2, 0], [0, 2]], \"label\": \"ε\"}, {\"type\": \"point\", \"name\": \"A\", \"at\": [1, 3], \"label\": \"A\"}, {\"type\": \"vector\", \"from\": [0, 0], \"to\": \"A\", \"label\": \"OA\"}], \"checks\": [{\"type\": \"on_line\", \"point\": \"A\", \"line\": \"ε\"}]}"
         }
       ]
     },

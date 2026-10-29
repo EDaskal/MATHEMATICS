@@ -145,7 +145,7 @@ class AgentSdkProvider(Provider):
             raise ProviderError(_friendly(result.result or result.subtype))
         return result
 
-    async def extract_json(self, system, user_text, images: list[ImageInput], schema):
+    async def extract_json(self, system, user_text, images: list[ImageInput], schema, count_images: int | None = None):
         content: list[dict] = []
         for img in images:
             content.append(
@@ -162,7 +162,8 @@ class AgentSdkProvider(Provider):
         errlog: list[str] = []
         options = self._options(system, schema, max_turns=4, errlog=errlog)
         try:
-            result = await asyncio.wait_for(self._run(content, options, errlog, images=len(images)),
+            result = await asyncio.wait_for(self._run(content, options, errlog,
+                                                      images=len(images) if count_images is None else count_images),
                                             timeout=self.timeout_sec)
         except asyncio.TimeoutError as exc:
             raise ProviderError("Ο Claude άργησε υπερβολικά να απαντήσει. Δοκιμάστε ξανά.") from exc

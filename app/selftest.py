@@ -261,6 +261,30 @@ def run(report_path: str | None = None) -> int:
 
     check("usage", usage)
 
+    def figure_check():
+        import io
+        import json as _json
+
+        from PIL import Image
+
+        from .figure_check import grid_crop, needs_check
+        from .figures import render
+
+        buf = io.BytesIO()
+        Image.new("RGB", (800, 600), "white").save(buf, format="PNG")
+        g = Image.open(io.BytesIO(grid_crop(buf.getvalue(), [0.1, 0.1, 0.6, 0.5])))
+        spec = {"axes": None, "elements": [
+            {"type": "vector", "from": [0, 0], "to": [3, 1], "label": "δ", "color": "red"},
+            {"type": "segment", "from": [0, 0], "to": [1, 3], "emphasis": True}]}
+        if not needs_check({"spec_json": _json.dumps(spec)}):
+            raise RuntimeError("needs_check")
+        svg, _png, _w = render(spec, colors="bw")
+        if b"#c62828" in svg.lower():
+            raise RuntimeError("ασπρόμαυρη σχεδίαση με χρώμα")
+        return f"πλέγμα {g.size[0]}×{g.size[1]} px, χρώματα/ασπρόμαυρο OK"
+
+    check("figure-check", figure_check)
+
     lines.append("RESULT: " + ("PASS" if ok else "FAIL"))
     text = "\n".join(lines)
     if report_path:

@@ -386,7 +386,8 @@ class Api:
             self.emit("transcribed", {"job_id": job_id, "result": result, "error": error})
 
         try:
-            asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done))
+            asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done,
+                                        check_figures=bool(self._settings.figure_check)))
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             for job_id, _ in jobs:
@@ -399,7 +400,7 @@ class Api:
 
         base = self._session_dir / f"fig_{key}_{uuid.uuid4().hex[:6]}"
         try:
-            info = render_to_files(spec_json, base, font=self._settings.math_font, size=self._settings.math_size)
+            info = render_to_files(spec_json, base, font=self._settings.math_font, colors=self._settings.figure_colors)
             info["png_data"] = _data_url(info["png"])
             info["error"] = None
             return info
@@ -410,6 +411,50 @@ class Api:
 
     def render_figure(self, key: str, spec_json: str) -> dict:
         return self._render(key, spec_json)
+
+    def _figure_call(self, image_ids: list[str], make) -> dict:
+        """Κοινό μέρος για «σχήμα από την εικόνα» και «νέος έλεγχος»: σελίδες, σύνδεση, σφάλματα."""
+        from .providers import ProviderError, get_provider
+
+        pages = [self._images[i].read_bytes() for i in (image_ids or []) if i in self._images]
+        if not pages:
+            return {"error": "Δεν βρέθηκαν οι εικόνες της άσκησης."}
+        try:
+            provider = get_provider(self._settings)
+            return asyncio.run(make(provider, pages))
+        except ProviderError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return {"error": f"Απρόσμενο σφάλμα: {exc}"}
+
+    def read_figure(self, key: str, image_ids: list[str], request: str = "", data: dict | None = None) -> dict:
+        """Σχήμα από τις εικόνες της άσκησης κατ' απαίτηση — π.χ. το σχήμα της λύσης, που η κανονική
+        ανάγνωση παραλείπει. Επιστρέφει {"figure", "render"} ή {"error"}."""
+        from .figure_check import exercise_text, read_figure
+        from .transcribe import load_rules
+
+        async def make(provider, pages):
+            fig = await read_figure(provider, pages, str(request or ""), exercise_text(data or {}), load_rules())
+            if fig.get("error"):
+                return {"error": fig["error"]}
+            return {"figure": fig, "render": self._render(key, fig["spec_json"])}
+
+        return self._figure_call(image_ids, make)
+
+    def recheck_figure(self, key: str, image_ids: list[str], figure: dict, data: dict | None = None) -> dict:
+        """Νέος έλεγχος του σχήματος με πλέγμα (και όταν ο αυτόματος είναι κλειστός στις ρυθμίσεις)."""
+        from .figure_check import check_figure, exercise_text
+        from .transcribe import load_rules
+
+        if not figure or not figure.get("spec_json"):
+            return {"error": "Η άσκηση δεν έχει σχήμα."}
+
+        async def make(provider, pages):
+            fig = await check_figure(provider, pages, dict(figure), exercise_text(data or {}), load_rules())
+            return {"figure": fig, "render": self._render(key, fig["spec_json"])}
+
+        return self._figure_call(image_ids, make)
 
     def crop_figure(self, key: str, image_id: str, crop: list[float]) -> dict:
         from .figures import crop_original
@@ -455,7 +500,7 @@ class Api:
                 if fr and fr.get("mode") == "redraw" and fr.get("spec_json"):
                     try:
                         info = render_to_files(fr["spec_json"], self._session_dir / f"final_{ti}_{ei}_{uuid.uuid4().hex[:4]}",
-                                               font=s.math_font, size=s.math_size)
+                                               font=s.math_font, colors=s.figure_colors)
                         ex["figure_render"] = info
                     except FigureError as exc:
                         warnings.append(f"Σχήμα θέματος {ti + 1}: {exc}")
@@ -668,7 +713,8 @@ class Api:
             self.emit("corpus_transcribed", {"job_id": job_id, "result": result, "error": error})
 
         try:
-            asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done, corpus=True))
+            asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done, corpus=True,
+                                        check_figures=bool(self._settings.figure_check)))
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             for job_id, _ in jobs:
@@ -817,7 +863,7 @@ class Api:
             if fr and fr.get("mode") == "redraw" and fr.get("spec_json"):
                 try:
                     ex["figure_render"] = render_to_files(fr["spec_json"], self._session_dir / f"corpus_{i}_{uuid.uuid4().hex[:4]}",
-                                                          font=s.math_font, size=s.math_size)
+                                                          font=s.math_font, colors=s.figure_colors)
                 except FigureError as exc:
                     warnings.append(f"Σχήμα άσκησης {i + 1}: {exc}")
                     ex["figure_render"] = None

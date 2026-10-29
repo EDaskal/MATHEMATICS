@@ -45,7 +45,7 @@ class AnthropicApiProvider(Provider):
             raise ProviderError("Λείπει η βιβλιοθήκη anthropic από την εγκατάσταση.") from exc
         return anthropic.AsyncAnthropic(api_key=self.api_key, timeout=self.timeout_sec, max_retries=2)
 
-    async def extract_json(self, system, user_text, images: list[ImageInput], schema):
+    async def extract_json(self, system, user_text, images: list[ImageInput], schema, count_images: int | None = None):
         content: list[dict] = []
         for img in images:
             content.append(
@@ -83,7 +83,7 @@ class AnthropicApiProvider(Provider):
             from ..usage import tracker
 
             u = getattr(resp, "usage", None)
-            tracker.record_result(images=len(images), model=getattr(resp, "model", "") or self.model, usage={
+            tracker.record_result(images=len(images) if count_images is None else count_images, model=getattr(resp, "model", "") or self.model, usage={
                 "input_tokens": getattr(u, "input_tokens", 0) or 0, "output_tokens": getattr(u, "output_tokens", 0) or 0,
                 "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
                 "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0})

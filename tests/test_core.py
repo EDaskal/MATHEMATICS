@@ -9,7 +9,7 @@ import pytest
 
 from app import points
 from app.docx_build import BuildContext, build_docx, exam_markdown
-from app.figures import parse_spec, render_to_files, run_checks
+from app.figures import FigureError, parse_spec, render_to_files, run_checks
 from app.transcribe import EXERCISE_SCHEMA, normalize
 
 FIX = Path(__file__).parent / "fixtures"
@@ -250,11 +250,57 @@ def test_math_font_in_settings_and_runs(tmp_path):
     assert not re.search(r"<m:r><w:rPr>(?:(?!</w:rPr>).)*</w:rPr><m:rPr>", doc)
 
 
-def test_figure_font_and_size(tmp_path):
+def test_figure_font_from_settings_size_from_figure(tmp_path):
+    """1.7.5: η γραμματοσειρά έρχεται από τις ρυθμίσεις, το μέγεθος όχι (όπως στο πρωτότυπο)."""
     ex = load("lines_figure.json")
-    info = render_to_files(ex["figure"]["spec_json"], tmp_path / "f", font="STIX Two Math", size=14)
+    info = render_to_files(ex["figure"]["spec_json"], tmp_path / "f", font="STIX Two Math", size=20)
     svg = Path(info["svg"]).read_text(encoding="utf-8")
-    assert "STIX Two Math" in svg and "14px" in svg
+    assert "STIX Two Math" in svg and "20px" not in svg
+    assert info["label_mode"] == "auto" and 8 <= info["label_pt"] <= 12
+
+
+def test_figure_label_size_follows_original():
+    from app.figures import label_size_pt
+
+    # κεφαλαίο γράμμα = 5% του ύψους ενός σχήματος 6 cm → ~0,3 cm → ~12,5 pt
+    assert 12 <= label_size_pt({"label_size": 0.05}, 7, 6) <= 13
+    # μικρότερα γράμματα στο πρωτότυπο → μικρότερα κι εδώ· όρια 7–16
+    assert label_size_pt({"label_size": 0.03}, 7, 6) < label_size_pt({"label_size": 0.05}, 7, 6)
+    assert label_size_pt({"label_size": 0.4}, 16, 16) == 16
+    assert label_size_pt({"label_size": 0.001}, 7, 6) == 7
+    # ρητό μέγεθος από τα κουμπιά Α− / Α+ υπερισχύει
+    assert label_size_pt({"label_size": 0.05, "label_pt": 9}, 7, 6) == 9
+    assert label_size_pt({"label_size": "abc"}, 7, 7) == 10.5
+
+
+def test_vector_labels_and_named_points(tmp_path):
+    import json as _json
+
+    from app.figures import _vec_parts
+
+    assert _vec_parts(r"\vec{α}+\vec{β}") == ("α+β", [(0, 1), (2, 3)])
+    assert _vec_parts(r"2\overrightarrow{AB}") == ("2AB", [(1, 3)])
+    assert _vec_parts("\\\\vec{u}") == ("u", [(0, 1)])  # διπλό escape από JSON μέσα σε JSON
+    assert _vec_parts("ε_1") == ("ε₁", [])
+    spec = {"width_cm": 8, "label_size": 0.06, "axes": None, "elements": [
+        {"type": "point", "name": "Α", "at": [0, 0], "label": "Α"},
+        {"type": "point", "name": "Β", "at": [5, 0], "label": "Β"},
+        {"type": "point", "name": "Γ", "at": [7, 3], "label": "Γ"},
+        {"type": "point", "name": "Δ", "at": [2, 3], "label": "Δ", "show": False},
+        {"type": "vector", "from": "Α", "to": "Β", "label": "α", "label_side": "right"},
+        {"type": "vector", "from": "Α", "to": "Δ", "label": "AΔ", "marks": 2},
+        {"type": "vector", "from": "Α", "to": "Γ", "label": r"\vec{α}+\vec{β}", "style": "dashed"},
+        {"type": "vector", "from": "Β", "to": "Δ", "head": "mid"},
+        {"type": "segment", "from": "Β", "to": "Γ", "marks": 2},
+        {"type": "angle", "vertex": "Α", "from": "Β", "to": "Δ", "right": True},
+        {"type": "line", "name": "ε", "through": ["Α", "Γ"]}],
+        "checks": [{"type": "on_line", "point": "Γ", "line": "ε"}]}
+    info = render_to_files(_json.dumps(spec, ensure_ascii=False), tmp_path / "v")
+    assert info["warnings"] == [] and info["label_mode"] == "original"
+    svg = Path(info["svg"]).read_text(encoding="utf-8")
+    assert "α+β" in svg and "AΔ" in svg  # οι ετικέτες μένουν κείμενο (επεξεργάσιμο στο Word)
+    with pytest.raises(FigureError):
+        render_to_files(_json.dumps({"elements": [{"type": "vector", "from": "Χ", "to": [1, 1]}]}), tmp_path / "x")
 
 
 def test_font_scan_detects_math_and_greek(tmp_path, monkeypatch):
@@ -953,3 +999,100 @@ def test_bridge_usage_state_and_api_mode(tmp_path, monkeypatch):
     r = api.usage_refresh()
     assert not r["ok"] and "συνδρομή" in r["error"]
     assert br is not None
+
+
+# ------------------------------------------------------------------ 1.7.6: χρώματα, βελάκια, έλεγχος σχημάτων
+
+def _png(w=400, h=300):
+    import io as _io
+
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (w, h), "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_figure_colors_and_bw(tmp_path):
+    import json as _json
+
+    spec = {"axes": None, "elements": [
+        {"type": "vector", "from": [0, 0], "to": [3, 1], "label": "x", "color": "red"},
+        {"type": "segment", "from": [0, 0], "to": [1, 3], "color": "#1565C0", "emphasis": True},
+        {"type": "polygon", "points": [[0, 0], [3, 1], [1, 3]], "fill": "green"}]}
+    col = Path(render_to_files(_json.dumps(spec), tmp_path / "c", colors="original")["svg"]).read_text(encoding="utf-8").lower()
+    bw = Path(render_to_files(_json.dumps(spec), tmp_path / "b", colors="bw")["svg"]).read_text(encoding="utf-8").lower()
+    assert "#c62828" in col and "#1565c0" in col
+    assert "#c62828" not in bw and "#1565c0" not in bw and "#2e7d32" not in bw
+
+
+def test_vec_arrow_clears_tall_letters():
+    from matplotlib.font_manager import FontProperties
+
+    from app.figures import _ink_top
+
+    prop = FontProperties(family="serif", size=12)
+    assert _ink_top("δ", prop) > _ink_top("α", prop) + 1  # το δ είναι ψηλότερο· το βελάκι μπαίνει πιο πάνω
+    assert _ink_top("AB", prop) > _ink_top("x", prop)
+
+
+def test_needs_check_and_grid():
+    import json as _json
+
+    from PIL import Image
+
+    from app.figure_check import exercise_text, grid_crop, needs_check
+
+    vec = {"spec_json": _json.dumps({"axes": {"x": [0, 5], "y": [0, 5]}, "elements": [{"type": "vector", "from": [0, 0], "to": [1, 1]}]}), "confidence": "high"}
+    graph = {"spec_json": _json.dumps({"axes": {"x": [0, 5], "y": [0, 5]}, "elements": [{"type": "function", "expr": "x"}]}), "confidence": "high"}
+    geo = {"spec_json": _json.dumps({"axes": None, "elements": []}), "confidence": "high"}
+    assert needs_check(vec) and needs_check(geo) and not needs_check(graph)
+    assert needs_check({**graph, "confidence": "low"}) and not needs_check(None)
+    g = Image.open(__import__("io").BytesIO(grid_crop(_png(), [0.2, 0.2, 0.6, 0.5])))
+    assert max(g.size) > 1400  # μεγεθυμένη περικοπή + περιθώριο για τους αριθμούς
+    assert "α) Να βρείτε" in exercise_text({"stem": "Δίνεται", "items": [{"label": "α", "text": "Να βρείτε", "items": []}]})
+
+
+class _FakeProvider:
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.calls = []
+
+    async def extract_json(self, system, user_text, images, schema, count_images=None):
+        self.calls.append({"text": user_text, "n": len(images), "count": count_images})
+        return self.answers.pop(0)
+
+
+def test_check_figure_replaces_or_keeps():
+    import asyncio
+    import json as _json
+
+    from app.figure_check import check_figure
+
+    first = {"spec_json": _json.dumps({"axes": None, "elements": [{"type": "vector", "from": [0, 0], "to": [1, 1]}]}),
+             "crop": [0, 0, 1, 1], "crop_page": 0, "confidence": "low", "description": "d"}
+    good = _json.dumps({"axes": None, "elements": [{"type": "vector", "from": [1, 1], "to": [0, 0], "label": "α"}]})
+    fp = _FakeProvider([{"notes": "α: από (1,1) προς (0,0)", "changes": "φορά α", "description": "νέο", "confidence": "high", "spec_json": good}])
+    out = asyncio.run(check_figure(fp, [_png()], first, "Να εκφράσετε το α", "κανόνες"))
+    assert out["spec_json"] == good and out["checked"] and out["confidence"] == "high"
+    assert fp.calls[0]["n"] == 2 and fp.calls[0]["count"] == 0  # πλέγμα + πρώτη σχεδίαση, δεν μετρά ως ανάγνωση
+    assert "Να εκφράσετε το α" in fp.calls[0]["text"]
+    bad = _FakeProvider([{"notes": "", "changes": "", "description": "", "confidence": "high", "spec_json": "{όχι json"}])
+    assert asyncio.run(check_figure(bad, [_png()], first, "", "κ")) is first
+
+
+def test_read_figure_from_solution():
+    import asyncio
+    import json as _json
+
+    from app.figure_check import read_figure
+
+    spec = _json.dumps({"axes": None, "elements": [{"type": "segment", "from": [0, 0], "to": [2, 1]}]})
+    fp = _FakeProvider([
+        {"found": True, "crop_page": 1, "crop": [0.5, 0.1, 0.9, 0.4], "description": "τρίγωνο της λύσης", "why": ""},
+        {"notes": "", "changes": "", "description": "τρίγωνο", "confidence": "high", "spec_json": spec}])
+    fig = asyncio.run(read_figure(fp, [_png(), _png()], "το σχήμα της λύσης", "Δίνεται τρίγωνο", "κ"))
+    assert fig["crop_page"] == 1 and fig["spec_json"] == spec and fig["checked"]
+    assert "το σχήμα της λύσης" in fp.calls[0]["text"] and fp.calls[0]["n"] == 2
+    none = _FakeProvider([{"found": False, "crop_page": 0, "crop": [0, 0, 1, 1], "description": "", "why": "μόνο κείμενο"}])
+    assert "Δεν βρέθηκε" in asyncio.run(read_figure(none, [_png()], "", "", "κ"))["error"]

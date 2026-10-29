@@ -33,6 +33,7 @@ class Provider:
         user_text: str,
         images: list[ImageInput],
         schema: dict,
+        count_images: int | None = None,  # πόσες εικόνες να μετρήσει η ένδειξη χρήσης (None = όλες)
     ) -> dict:
         raise NotImplementedError
 

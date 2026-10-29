@@ -131,7 +131,22 @@ def corpus_text(n_pages: int) -> str:
     return CORPUS_TEXT.replace("{pages}", pages)
 
 
-async def transcribe_corpus(provider: Provider, pages: list[bytes] | bytes, rules: str | None = None) -> list[dict]:
+async def check_figures(provider: Provider, pages: list[bytes], exercises: list[dict], rules: str) -> None:
+    """Δεύτερος έλεγχος των σχημάτων (με πλέγμα) όπου χρειάζεται· αν αποτύχει, μένει η πρώτη ανάγνωση."""
+    from .figure_check import check_figure, exercise_text, needs_check
+
+    for ex in exercises:
+        fig = ex.get("figure")
+        if not needs_check(fig):
+            continue
+        try:
+            ex["figure"] = await check_figure(provider, pages, fig, exercise_text(ex), rules)
+        except Exception:  # noqa: BLE001 — π.χ. όριο συνδρομής: κρατάμε ό,τι έχουμε
+            pass
+
+
+async def transcribe_corpus(provider: Provider, pages: list[bytes] | bytes, rules: str | None = None,
+                            check: bool = False) -> list[dict]:
     """Μεταγραφή μιας εικόνας (ή διαδοχικών σελίδων) που μπορεί να έχει πολλές ασκήσεις."""
     if isinstance(pages, (bytes, bytearray)):
         pages = [bytes(pages)]
@@ -144,7 +159,10 @@ async def transcribe_corpus(provider: Provider, pages: list[bytes] | bytes, rule
             exs = data.get("exercises") if isinstance(data, dict) else None
             if not isinstance(exs, list):
                 raise ProviderError("Μη αναμενόμενη απάντηση από τον Claude.")
-            return [normalize(e, len(images)) for e in exs if isinstance(e, dict)]
+            out = [normalize(e, len(images)) for e in exs if isinstance(e, dict)]
+            if check:
+                await check_figures(provider, list(pages), out, rules)
+            return out
         except ProviderError as exc:
             last_exc = exc
             msg = str(exc)
@@ -241,8 +259,10 @@ def normalize(data: dict, n_pages: int = 1) -> dict:
 
 # --------------------------------------------------------------------------- εκτέλεση
 
-async def transcribe_one(provider: Provider, pages: list[bytes] | bytes, rules: str | None = None) -> dict:
-    """Μεταγραφή μιας άσκησης· `pages` = μία ή περισσότερες διαδοχικές σελίδες (εικόνες)."""
+async def transcribe_one(provider: Provider, pages: list[bytes] | bytes, rules: str | None = None,
+                         check: bool = False) -> dict:
+    """Μεταγραφή μιας άσκησης· `pages` = μία ή περισσότερες διαδοχικές σελίδες (εικόνες).
+    Με `check=True` τα σχήματα που το χρειάζονται περνούν και δεύτερο έλεγχο με πλέγμα."""
     if isinstance(pages, (bytes, bytearray)):
         pages = [bytes(pages)]
     images = [prepare_image(p) for p in pages]
@@ -251,7 +271,10 @@ async def transcribe_one(provider: Provider, pages: list[bytes] | bytes, rules: 
     for _attempt in range(2):  # μία επανάληψη για προσωρινά σφάλματα
         try:
             data = await provider.extract_json(rules, user_text(len(images)), images, EXERCISE_SCHEMA)
-            return normalize(data, len(images))
+            out = normalize(data, len(images))
+            if check:
+                await check_figures(provider, list(pages), [out], rules)
+            return out
         except ProviderError as exc:
             last_exc = exc
             msg = str(exc)
@@ -266,6 +289,7 @@ async def transcribe_many(
     max_parallel: int = 3,
     on_done: Callable[[str, dict | None, str | None], Awaitable[None] | None] | None = None,
     corpus: bool = False,
+    check_figures: bool = False,
 ) -> dict[str, dict | str]:
     """Μεταγράφει πολλές ασκήσεις παράλληλα. Επιστρέφει {id: αποτέλεσμα ή μήνυμα σφάλματος}.
 
@@ -279,7 +303,7 @@ async def transcribe_many(
     async def run(job_id: str, data):
         async with sem:
             try:
-                res = await fn(provider, data, rules)
+                res = await fn(provider, data, rules, check=check_figures)
                 results[job_id] = res
                 err = None
             except Exception as exc:  # noqa: BLE001 — κάθε σφάλμα πάει στον χρήστη

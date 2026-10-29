@@ -1127,6 +1127,85 @@ function figurePage(ex) {
   return ex.pages[p];
 }
 
+function figLabelRow(fig, st, key, rerender) {
+  // Μέγεθος γραμμάτων του επανασχεδιασμένου σχήματος (ανεξάρτητο από τις Ρυθμίσεις, όπως στο πρωτότυπο).
+  const r = st.render;
+  if (st.mode !== "redraw" || !r || r.error || !r.label_pt) return null;
+  const apply = async (pt) => {
+    let o;
+    try { o = JSON.parse(fig.spec_json); } catch (_) { toast("Η περιγραφή του σχήματος δεν είναι έγκυρη.", true); return; }
+    if (pt == null) delete o.label_pt; else o.label_pt = Math.round(pt * 2) / 2;
+    fig.spec_json = JSON.stringify(o);
+    st.render = await api.render_figure(key, fig.spec_json);
+    rerender();
+  };
+  const how = { manual: "δικό σας μέγεθος", original: "όπως στο πρωτότυπο", auto: "αυτόματο" }[r.label_mode] || "";
+  const pt = String(r.label_pt).replace(".", ",");
+  return el("div", { class: "row fig-size" },
+    el("span", { class: "small", text: "Γράμματα σχήματος:" }),
+    el("button", { class: "btn small", text: "Α−", title: "Μικρότερα γράμματα στο σχήμα",
+      disabled: r.label_pt <= 6, onclick: () => apply(Math.max(6, r.label_pt - 1)) }),
+    el("span", { class: "small", text: `${pt} pt` }),
+    el("button", { class: "btn small", text: "Α+", title: "Μεγαλύτερα γράμματα στο σχήμα",
+      disabled: r.label_pt >= 20, onclick: () => apply(Math.min(20, r.label_pt + 1)) }),
+    el("span", { class: "small muted", text: how }),
+    r.label_mode === "manual" ? el("button", { class: "btn small ghost", text: "Επαναφορά", title: "Μέγεθος όπως στο πρωτότυπο",
+      onclick: () => apply(null) }) : null);
+}
+
+function exPlainData(d) {
+  return { stem: d.stem || "", items: d.items || [], closing: d.closing || "" };
+}
+
+async function figureFromImage(ex, ids, request, rerender, btn) {
+  // Σχήμα από τις εικόνες της άσκησης (π.χ. από τη λύση), ή νέος έλεγχος του υπάρχοντος με πλέγμα.
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Ο Claude κοιτάζει το σχήμα… (περίπου ½–1 λεπτό)";
+  try {
+    const r = request === null
+      ? await api.recheck_figure(ex.id, ids, ex.data.figure, exPlainData(ex.data))
+      : await api.read_figure(ex.id, ids, request, exPlainData(ex.data));
+    if (r.error) { toast(r.error, true); btn.disabled = false; btn.textContent = old; return; }
+    ex.data.figure = r.figure;
+    ex.fig = { mode: "redraw", render: r.render, crop: null };
+    toast(request === null ? "Ο έλεγχος του σχήματος ολοκληρώθηκε." : "Το σχήμα προστέθηκε.");
+  } catch (e) {
+    toast(String(e), true);
+  }
+  rerender();
+}
+
+function figureCheckInfo(fig) {
+  if (!fig || !fig.checked) return null;
+  return el("div", { class: "small fig-checked", title: fig.check_notes || "" },
+    el("b", { text: "✓ Ελέγχθηκε σε πλέγμα." }), " ",
+    el("span", { class: "muted", text: (fig.check_notes || "").slice(0, 400) }));
+}
+
+function figureToolsRow(ex, ids, rerender) {
+  // Για άσκηση ΜΕ σχήμα: νέος έλεγχος, ή άλλο σχήμα από την εικόνα (π.χ. από τη λύση).
+  const req = el("input", { type: "text", placeholder: "Ποιο σχήμα; π.χ. «το σχήμα της λύσης» (προαιρετικό)" });
+  const again = el("button", { class: "btn small", text: "🔍 Νέος έλεγχος με πλέγμα",
+    title: "Ο Claude ξανακοιτά το σχήμα πάνω σε πλέγμα και διορθώνει θέσεις, φορές βελών και χρώματα",
+    onclick: () => figureFromImage(ex, ids, null, rerender, again) });
+  const other = el("button", { class: "btn small ghost", text: "Άλλο σχήμα από την εικόνα",
+    onclick: () => { if (confirm("Το τωρινό σχήμα θα αντικατασταθεί. Συνέχεια;")) figureFromImage(ex, ids, req.value, rerender, other); } });
+  return el("div", { class: "fig-tools" }, el("div", { class: "row" }, again), el("div", { class: "row" }, req, other));
+}
+
+function noFigureBox(ex, ids, rerender) {
+  // Η άσκηση δεν έχει σχήμα (ή το σχήμα ήταν στη λύση και παραλείφθηκε): προσθήκη κατ' απαίτηση.
+  const req = el("input", { type: "text", placeholder: "Ποιο σχήμα; π.χ. «το σχήμα της λύσης» (προαιρετικό)" });
+  const add = el("button", { class: "btn small", text: "＋ Σχήμα από την εικόνα",
+    title: "Ο Claude βρίσκει το σχήμα στην εικόνα — και μέσα στη λύση — και το ξανασχεδιάζει",
+    onclick: () => figureFromImage(ex, ids, req.value, rerender, add) });
+  return el("details", { class: "fig-add" },
+    el("summary", { class: "small", text: "＋ Προσθήκη σχήματος (π.χ. από τη λύση)" }),
+    el("p", { class: "small muted", text: "Η ανάγνωση κρατά μόνο την εκφώνηση. Αν το σχήμα που χρειάζεστε είναι μέσα στη λύση του βιβλίου ή δεν διαβάστηκε, ζητήστε το εδώ." }),
+    el("div", { class: "row" }, req, add));
+}
+
 function figureBox(t, tIdx, ex) {
   const fig = ex.data.figure;
   const st = ex.fig;
@@ -1147,10 +1226,15 @@ function figureBox(t, tIdx, ex) {
   box.append(el("div", { class: "radio-row" }, radio("redraw", "Επανασχεδιασμένο (επεξεργάσιμο στο Word)"), radio("original", "Πρωτότυπη εικόνα (περικοπή)")));
   if (img) box.append(img);
   if (current && current.error) box.append(el("div", { class: "fig-warn", text: current.error }));
+  const sizeRow = figLabelRow(fig, st, ex.id, rerender);
+  if (sizeRow) box.append(sizeRow);
   if (st.mode === "redraw" && current && current.warnings && current.warnings.length) {
     box.append(el("div", { class: "fig-warn" }, ...current.warnings.map((w) => el("div", { text: "⚠ " + w }))));
   }
   box.append(el("div", { class: "small muted", text: fig.description }));
+  const chk = figureCheckInfo(fig);
+  if (chk) box.append(chk);
+  box.append(figureToolsRow(ex, ex.pages.map((p) => p.imageId), rerender));
 
   const spec = el("textarea", { rows: 8, spellcheck: "false" });
   spec.value = prettyJson(fig.spec_json);
@@ -1225,6 +1309,7 @@ function renderExercise(t, tIdx, ex) {
   editor.append(el("div", { class: "field-label", text: single ? "Εκφώνηση" : `Εκφώνηση ${labeler(exIdx, [])}` }),
     textPair(d.stem, (v) => { d.stem = v; }, refmap, 3));
   if (d.figure && ex.fig) editor.append(figureBox(t, tIdx, ex));
+  else editor.append(noFigureBox(ex, ex.pages.map((p) => p.imageId), rerender));
   editor.append(el("div", { class: "field-label", text: "Ερωτήματα" }));
   editor.append(single
     ? renderItems(d.items, 1, (p) => labeler(exIdx, p), [], refmap, rerender)
@@ -1365,6 +1450,8 @@ function fillSettings() {
   $("#s-math-font").value = s.math_font || "Cambria Math";
   fillSizeSelect($("#s-size"), +s.font_size || 12);
   fillSizeSelect($("#s-math-size"), +s.math_size || 12);
+  $("#s-fig-colors").value = s.figure_colors === "bw" ? "bw" : "original";
+  $("#s-fig-check").checked = s.figure_check !== false;
   fillFontLists();
   if (!FONT_INFO) loadFonts(false);
   $("#s-theme").value = s.theme || "system";
@@ -1451,6 +1538,8 @@ function collectSettings() {
     font_size: +$("#s-size").value || 12,
     math_font: $("#s-math-font").value.trim() || "Cambria Math",
     math_size: +$("#s-math-size").value || 12,
+    figure_colors: $("#s-fig-colors").value,
+    figure_check: $("#s-fig-check").checked,
     theme: $("#s-theme").value,
     check_updates: $("#s-check-updates").checked,
     update_repo: $("#s-repo").value.trim() || "EDaskal/MATHEMATICS",
@@ -2008,7 +2097,12 @@ function corpusFigureBox(ex) {
   box.append(el("div", { class: "radio-row" }, radio("redraw", "Επανασχεδιασμένο"), radio("original", "Πρωτότυπη εικόνα (περικοπή)"), radio("none", "Χωρίς σχήμα")));
   if (current && current.png_data) box.append(el("img", { class: "fig-img", src: current.png_data, onclick: () => lightbox(current.png_data) }));
   if (current && current.error) box.append(el("div", { class: "fig-warn", text: current.error }));
+  const sizeRow = figLabelRow(fig, st, ex.id, rerender);
+  if (sizeRow) box.append(sizeRow);
   box.append(el("div", { class: "small muted", text: fig.description }));
+  const chk = figureCheckInfo(fig);
+  if (chk) box.append(chk);
+  box.append(figureToolsRow(ex, imgs.map((im) => im.imageId), rerender));
   return box;
 }
 
@@ -2067,6 +2161,11 @@ function renderCorpusExercise(ex, i) {
   }
   editor.append(el("div", { class: "field-label", text: "Εκφώνηση" }), textPair(d.stem, (v) => { d.stem = v; }, {}, 3));
   if (d.figure && ex.fig) editor.append(corpusFigureBox(ex));
+  else {
+    const job = C.jobs[ex.jobId];
+    const ids = C.images.filter((im) => job?.imageIds.includes(im.id)).map((im) => im.imageId);
+    if (ids.length) editor.append(noFigureBox(ex, ids, rerender));
+  }
   editor.append(el("div", { class: "field-label", text: "Ερωτήματα" }));
   editor.append(renderItems(d.items, 1, corpusItemLabel, [], {}, rerender));
   editor.append(el("button", { class: "btn small ghost", text: "+ ερώτημα", onclick: () => { d.items.push({ label: "", text: "", choices: null, items: [] }); rerender(); } }));

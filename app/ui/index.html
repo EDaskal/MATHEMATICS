@@ -313,11 +313,12 @@
       <label>Γραμματοσειρά μαθηματικών
         <input id="s-math-font" list="math-fonts" type="text" autocomplete="off">
         <datalist id="math-fonts"></datalist>
-        <span class="muted small">Εξισώσεις και ετικέτες σχημάτων/διαγραμμάτων. Το Word δέχεται μόνο γραμματοσειρές μαθηματικών (με πίνακα MATH).</span>
+        <span class="muted small">Εξισώσεις και ετικέτες σχημάτων/διαγραμμάτων (στα σχήματα μόνο η γραμματοσειρά, όχι το μέγεθος). Το Word δέχεται μόνο γραμματοσειρές μαθηματικών (με πίνακα MATH).</span>
         <span class="field-warn" id="s-math-warn"></span>
       </label>
       <label>Μέγεθος μαθηματικών (pt)
         <select id="s-math-size"></select>
+        <span class="muted small">Μόνο για τις εξισώσεις. Τα γράμματα των σχημάτων παίρνουν το μέγεθος που έχουν στο πρωτότυπο.</span>
       </label>
     </div>
     <details id="s-math-recommend">
@@ -326,6 +327,18 @@
         (δεξί κλικ στο αρχείο → Εγκατάσταση) και πατήστε «↻ Ανανέωση λίστας».</div>
       <div class="doc" id="s-math-recommend-list"></div>
     </details>
+    <div class="grid2">
+      <label>Χρώματα στα σχήματα
+        <select id="s-fig-colors">
+          <option value="original">Όπως στο πρωτότυπο</option>
+          <option value="bw">Ασπρόμαυρα (έντονη γραμμή αντί για χρώμα)</option>
+        </select>
+        <span class="muted small">Για ασπρόμαυρη εκτύπωση: ό,τι είναι έγχρωμο γίνεται μαύρο και πιο έντονο. Ισχύει στο Word και στα σχήματα που ξανασχεδιάζονται.</span>
+      </label>
+      <label class="check wrap"><input type="checkbox" id="s-fig-check"> Δεύτερος έλεγχος σχημάτων
+        <span class="muted small">Μετά την ανάγνωση, ο Claude ξανακοιτά τα σχήματα με διανύσματα ή τα γεωμετρικά σχήματα πάνω σε πλέγμα και διορθώνει θέσεις και φορές βελών. Πιο ακριβές· κρατά 20–30″ ακόμα και λίγη ακόμα χρήση της συνδρομής ανά σχήμα.</span>
+      </label>
+    </div>
     <div class="grid2">
       <label>Υπο-ερωτήματα
         <select id="s-sublevel"><option value="roman">i), ii), iii)</option><option value="bullet">Κουκκίδες</option></select>

@@ -484,3 +484,17 @@ body.mode-corpus .steps { visibility: hidden; }
 .cthumb .tools button:disabled { opacity: .35; cursor: default; }
 .cthumb .tools button.in-grp { background: transparent; border: 1px solid var(--accent); color: var(--accent); font-weight: 700; padding: 1px 7px; }
 .cthumb .tools button.in-grp:hover:not(:disabled) { background: var(--accent); color: #fff; }
+
+/* 1.7.5: μέγεθος γραμμάτων σχήματος */
+.fig-size { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 2px; }
+.fig-size .btn { min-width: 34px; }
+/* 1.7.6 */
+label.check.wrap { flex-wrap: wrap; align-self: start; }
+label.check.wrap > span { flex-basis: 100%; font-weight: 400; }
+.fig-tools { display: grid; gap: 6px; margin-top: 8px; }
+.fig-tools .row, .fig-add .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.fig-tools input, .fig-add input { flex: 1 1 260px; min-width: 0; }
+.fig-add { margin: 8px 0; border: 1px dashed var(--line, #ccc); border-radius: 8px; padding: 6px 10px; }
+.fig-add summary { cursor: pointer; }
+.fig-checked { margin-top: 6px; color: var(--ok, #2e7d32); }
+.fig-checked .muted { color: var(--muted, #777); }
