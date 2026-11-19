@@ -162,7 +162,7 @@ def grid_crop(page: bytes, crop, pad: float = PAD, n: int = GRID_N) -> bytes:
 def needs_check(fig: dict | None) -> bool:
     """Σχήματα με διανύσματα, γεωμετρικά (χωρίς άξονες) ή με αβέβαιη ανάγνωση.
     Τα γραφήματα συναρτήσεων σε άξονες με βέβαιη ανάγνωση δεν χρειάζονται δεύτερο κοίταγμα."""
-    if not fig or not fig.get("spec_json"):
+    if not fig or not fig.get("spec_json") or fig.get("checked"):
         return False
     if fig.get("confidence") == "low":
         return True

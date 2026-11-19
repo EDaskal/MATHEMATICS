@@ -240,8 +240,34 @@
       <button class="icon-btn" data-close>✕</button>
     </div>
 
-    <h3>Σύνδεση με τον Claude</h3>
+    <h3>Ανάγνωση ασκήσεων</h3>
     <div class="radio-group" id="s-provider"></div>
+
+    <div class="sub" id="s-local" hidden>
+      <p class="muted">Οι ασκήσεις διαβάζονται <b>στον υπολογιστή</b>, χωρίς internet και χωρίς να «ξοδεύεται» η συνδρομή.
+        Το μοντέλο κατεβαίνει μία φορά. Η ανάγνωση είναι λίγο πιο αργή και κάθε άσκηση σημειώνεται «Προς έλεγχο».</p>
+      <div class="field-warn" id="s-local-engine" hidden>⚠ Λείπει η μηχανή του τοπικού μοντέλου από την εγκατάσταση. Εγκαταστήστε ξανά την εφαρμογή.</div>
+      <div id="s-local-models" class="lm-list"></div>
+      <label class="check"><input type="checkbox" id="s-local-hybrid">
+        <span><b>Μικτή λειτουργία</b>: τα σχήματα τα ξανασχεδιάζει ο Claude (όταν υπάρχει internet). Χωρίς αυτήν, τα σχήματα μπαίνουν ως εικόνα από τη σελίδα.</span></label>
+      <div class="row">
+        <span class="small">Σύνδεση Claude για τα σχήματα:</span>
+        <select id="s-local-claude">
+          <option value="agent_sdk">Συνδρομή Claude</option>
+          <option value="api">Κλειδί API</option>
+        </select>
+      </div>
+      <details>
+        <summary class="small">Για προχωρημένους</summary>
+        <div class="grid2">
+          <label>Πυρήνες επεξεργαστή
+            <input id="s-local-threads" type="number" min="0" max="64">
+            <span class="muted small">0 = αυτόματα (προτείνεται).</span>
+          </label>
+          <div class="small muted">Φάκελος μοντέλων:<br><span id="s-local-folder"></span></div>
+        </div>
+      </details>
+    </div>
 
     <div class="sub" id="s-agent">
       <p class="muted">Χρησιμοποιεί τη συνδρομή Claude (Pro/Max). Πατήστε «Σύνδεση με συνδρομή»: ανοίγει παράθυρο,
@@ -271,8 +297,8 @@
       </details>
     </div>
 
-    <div class="grid2">
-      <label>Μοντέλο
+    <div class="grid2" id="s-claude-model">
+      <label>Μοντέλο Claude
         <input id="s-model" list="models" type="text">
         <datalist id="models"></datalist>
         <span class="muted small">Τα opus / sonnet ακολουθούν αυτόματα το νεότερο μοντέλο.</span>

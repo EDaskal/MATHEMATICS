@@ -299,6 +299,23 @@ def run(report_path: str | None = None) -> int:
 
     check("update-tls", update_tls)
 
+    def local_model():
+        """1.8.0: η μηχανή llama-server μέσα στην εγκατάσταση τρέχει, και ο καθαρισμός/η δομή δουλεύουν."""
+        import sys as _sys
+
+        from . import local_llm
+        from .local_parse import to_exercises
+
+        ex = to_exercises("1.2 Δίνεται $f(x) = a x + \\sin x$.\n\n$\\alpha)$ Να βρείτε το $a$.\n\n![image](image_1.png)")[0]
+        if ex["source_label"] != "1.2" or ex["items"][0]["label"] != "α" or "\\mathrm{ημ}" not in ex["stem"] or not ex["_fig"]:
+            raise RuntimeError(f"δομή: {ex}")
+        if getattr(_sys, "frozen", False) or local_llm.server_path():
+            ver = local_llm.engine_version()
+            return f"llama-server: {ver}; μοντέλα στο {local_llm.models_dir()}"
+        return "δομή OK (χωρίς llama-server σε αυτό το περιβάλλον)"
+
+    check("local-model", local_model)
+
     lines.append("RESULT: " + ("PASS" if ok else "FAIL"))
     text = "\n".join(lines)
     if report_path:

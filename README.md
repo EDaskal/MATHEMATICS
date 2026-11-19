@@ -27,6 +27,11 @@ Word** της καθηγήτριας, στο τέλος της ενότητας 
 (ίδιο Wi-Fi, χωρίς εγκατάσταση εφαρμογής στο κινητό), τόσο στο Corpus όσο και στο διαγώνισμα. Από το κινητό
 ή τον υπολογιστή μπαίνουν και **PDF**, με επιλογή σελίδων.
 
+**Τοπικό μοντέλο (1.8.0):** οι ασκήσεις μπορούν να διαβάζονται και **μέσα στον υπολογιστή**, χωρίς internet και
+χωρίς να καταναλώνεται η συνδρομή (LightOnOCR-2 μέσω llama.cpp, λήψη μία φορά ~1,1 GB). Με τη **μικτή λειτουργία**
+το κείμενο διαβάζεται τοπικά και ο Claude ξανασχεδιάζει μόνο τα σχήματα. Οι τοπικές μεταγραφές σημειώνονται
+«Προς έλεγχο».
+
 **Υπόλοιπο συνδρομής:** πάνω δεξιά φαίνεται μόνιμα η χρήση του 5ώρου και του εβδομαδιαίου ορίου της συνδρομής
 Claude, με λεπτομέρειες, ώρες μηδενισμού και εκτίμηση πόσες εικόνες χωρούν ακόμη.
 
@@ -98,6 +103,9 @@ app/
   providers/           ένας φάκελος ανά τρόπο σύνδεσης
     agent_sdk.py       συνδρομή Claude μέσω Claude Agent SDK
     anthropic_api.py   Anthropic API με κλειδί
+    local.py           τοπικό μοντέλο (LocalProvider) και μικτή λειτουργία (HybridProvider: σχήματα με Claude)
+  local_llm.py         τοπικό μοντέλο: κατάλογος (καρφωμένα commit + SHA-256), λήψη από Hugging Face, llama-server
+  local_parse.py       έξοδος τοπικού μοντέλου → καθαρισμός συστηματικών λαθών → δομή άσκησης· εντοπισμός σχήματος
   transcribe.py        σχήμα JSON μεταγραφής, προετοιμασία εικόνων, παράλληλη εκτέλεση
   figures.py           spec σχήματος → SVG/PNG (matplotlib) + αριθμητικοί έλεγχοι γεωμετρίας
   docx_build.py        Markdown → pandoc → διορθώσεις (.docx), έλεγχος round-trip εξισώσεων
@@ -113,7 +121,7 @@ app/
   updates.py           έλεγχος/λήψη/εγκατάσταση ενημερώσεων από GitHub Releases
   resources/rules.md   οι κανόνες μεταγραφής (system prompt)
   ui/                  HTML/CSS/JS (KaTeX, marked — τοπικά, χωρίς internet)
-build/                 PyInstaller spec, Inno Setup, εικονίδιο
+build/                 PyInstaller spec, Inno Setup, εικονίδιο (το app/bin/llama/ = llama-server.exe το φτιάχνει το CI)
 docs/                  οδηγός χρήσης, οδηγίες GitHub
 scripts/               στοιχεία build, απόσπασμα CHANGELOG, δοκιμαστικά εργαλεία
 CHANGELOG.md           ιστορικό αλλαγών (εμφανίζεται στο «Τι νέο»)
@@ -137,6 +145,9 @@ python app/main.py --selftest         # αυτοέλεγχος χωρίς κλή
 python -m pytest -q
 ```
 
+Τοπικό μοντέλο σε ανάπτυξη (Linux/Mac): χτίστε το `llama-server` της llama.cpp (tag `LLAMA_TAG` του build.yml) και
+ορίστε `DIAGONISMATA_LLAMA_SERVER=/διαδρομή/llama-server`· προαιρετικά `DIAGONISMATA_MODELS=/φάκελος/μοντέλων`.
+
 ### Εκδόσεις και ενημερώσεις
 
 - Ο αριθμός έκδοσης είναι στο `app/__init__.py` (`__version__`, μορφή ΜΕΙΖΩΝ.ΕΛΑΣΣΩΝ.ΔΙΟΡΘΩΣΗ).
@@ -150,8 +161,8 @@ python -m pytest -q
 
 ### Build (GitHub Actions)
 
-Κάθε `push` στο `main` χτίζει το πρόγραμμα εγκατάστασης σε Windows: δοκιμές → στοιχεία build →
-PyInstaller → **αυτοέλεγχος του .exe** → Inno Setup → (αν η έκδοση είναι νέα) Release.
+Κάθε `push` στο `main` χτίζει το πρόγραμμα εγκατάστασης σε Windows: μηχανή τοπικού μοντέλου (llama.cpp
+`LLAMA_TAG`, κρατιέται στην cache μετά το πρώτο build) → δοκιμές → στοιχεία build → PyInstaller → **αυτοέλεγχος του .exe** → Inno Setup → (αν η έκδοση είναι νέα) Release.
 Αναλυτικά βήματα για μη προγραμματιστές: [docs/github-guide.md](docs/github-guide.md).
 
 Για νεότερο Agent SDK/CLI αρκεί ένα νέο build, γιατί το `requirements.txt` ορίζει μόνο ελάχιστη έκδοση.

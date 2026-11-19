@@ -243,8 +243,11 @@ def normalize(data: dict, n_pages: int = 1) -> dict:
             "crop": [min(1.0, max(0.0, float(c))) for c in crop],
             "crop_page": min(max(0, int(fig.get("crop_page") or 0)), max(0, n_pages - 1)),
             "confidence": fig.get("confidence", "high"),
-            "use_original": False,
+            "use_original": bool(fig.get("use_original")),  # τοπικό μοντέλο χωρίς Claude: πρωτότυπη εικόνα
         }
+        if data["figure"].get("checked"):  # ήδη ελεγμένο σε πλέγμα (π.χ. μικτή λειτουργία)
+            fig["checked"] = True
+            fig["check_notes"] = str(data["figure"].get("check_notes", ""))
     else:
         fig = None
     return {
@@ -254,6 +257,7 @@ def normalize(data: dict, n_pages: int = 1) -> dict:
         "closing": norm_text(data.get("closing", "")),
         "figure": fig,
         "uncertain": [str(u) for u in (data.get("uncertain") or []) if str(u).strip()],
+        "review": bool(data.get("review")),  # 1.8.0: μεταγραφή με τοπικό μοντέλο → «Προς έλεγχο»
     }
 
 

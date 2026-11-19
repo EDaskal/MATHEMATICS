@@ -12,9 +12,11 @@ SECRET_OAUTH = "claude_oauth_token"
 SECRET_API_KEY = "anthropic_api_key"
 
 # Τρόποι σύνδεσης. Για νέο τρόπο: νέα κλάση στο app/providers και μια γραμμή εδώ.
+# Το «local» (1.8.0) διαβάζει τις ασκήσεις στον υπολογιστή· με «μικτή λειτουργία» ο Claude κάνει τα σχήματα.
 PROVIDERS = {
     "agent_sdk": "Συνδρομή Claude (Agent SDK)",
     "api": "Anthropic API (κλειδί API)",
+    "local": "Τοπικό μοντέλο (χωρίς internet)",
 }
 
 # Προτεινόμενα μοντέλα. Τα σύντομα ονόματα (opus/sonnet/haiku) ακολουθούν αυτόματα το νεότερο
@@ -65,6 +67,11 @@ class Settings:
     # Σχήματα: χρώματα όπως στο πρωτότυπο ή ασπρόμαυρα (original | bw) και δεύτερος έλεγχος με πλέγμα
     figure_colors: str = "original"
     figure_check: bool = True
+    # Τοπικό μοντέλο (1.8.0): ποιο μοντέλο, μικτή λειτουργία (Claude για τα σχήματα) και με ποια σύνδεση
+    local_model: str = "lightonocr2"
+    local_hybrid: bool = True
+    local_claude: str = "agent_sdk"  # agent_sdk | api
+    local_threads: int = 0  # 0 = αυτόματα
 
     @classmethod
     def load(cls) -> "Settings":

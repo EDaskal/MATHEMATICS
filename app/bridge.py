@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import unicodedata
 import uuid
@@ -50,6 +51,12 @@ def open_path(path: str | Path) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
+def _local_catalog() -> dict:
+    from .local_llm import CATALOG
+
+    return CATALOG
+
+
 class Api:
     def __init__(self):
         self._settings = Settings.load()
@@ -64,6 +71,7 @@ class Api:
 
         tracker.on_change = lambda snap: self.emit("usage", self._usage_view(snap))
         self._usage_refreshing = False
+        self._local_job: threading.Event | None = None  # λήψη τοπικού μοντέλου σε εξέλιξη
         # σάρωση γραμματοσειρών στο παρασκήνιο: οι Ρυθμίσεις ανοίγουν αμέσως με έτοιμη λίστα
         threading.Thread(target=self._warm_fonts, daemon=True).start()
 
@@ -131,23 +139,30 @@ class Api:
         from .usage import tracker
 
         snap = snap or tracker.snapshot()
-        return {**snap, "provider": self._settings.provider, "auto": bool(self._settings.usage_check),
-                "refreshing": bool(getattr(self, "_usage_refreshing", False))}
+        return {**snap, "provider": self._claude_kind() or "local", "local": self._settings.provider == "local",
+                "auto": bool(self._settings.usage_check), "refreshing": bool(getattr(self, "_usage_refreshing", False))}
+
+    def _claude_kind(self) -> str | None:
+        """Ποια σύνδεση Claude χρησιμοποιείται (None = καμία: μόνο τοπικό μοντέλο)."""
+        s = self._settings
+        if s.provider == "local":
+            return s.local_claude if s.local_hybrid else None
+        return s.provider
 
     def usage_state(self) -> dict:
         return self._usage_view()
 
     def usage_refresh(self) -> dict:
         """Ελάχιστη κλήση στη συνδρομή για φρέσκα όρια (5ωρο / εβδομάδα). Μόνο με «συνδρομή Claude»."""
-        if self._settings.provider != "agent_sdk":
+        if self._claude_kind() != "agent_sdk":
             return {"ok": False, "error": "Τα όρια φαίνονται μόνο με σύνδεση «συνδρομή Claude».", "state": self._usage_view()}
         if self._usage_refreshing:
             return {"ok": True, "state": self._usage_view()}
         self._usage_refreshing = True
         try:
-            from .providers import get_provider
+            from .providers import get_claude_provider
 
-            provider = get_provider(self._settings)
+            provider = get_claude_provider(self._settings, "agent_sdk")
             asyncio.run(provider.refresh_usage())
             return {"ok": True, "state": self._usage_view()}
         except Exception as exc:  # noqa: BLE001
@@ -156,9 +171,75 @@ class Api:
             self._usage_refreshing = False
 
     def save_settings(self, data: dict) -> dict:
+        before = (self._settings.provider, self._settings.local_model, self._settings.local_threads)
         self._settings.update(data or {})
+        if self._settings.local_model not in _local_catalog():
+            self._settings.local_model = "lightonocr2"
+        if self._settings.local_claude not in ("agent_sdk", "api"):
+            self._settings.local_claude = "agent_sdk"
         self._settings.save()
+        after = (self._settings.provider, self._settings.local_model, self._settings.local_threads)
+        if before != after:
+            from . import local_llm
+
+            local_llm.stop()  # ξεκινά ξανά με τη νέα ρύθμιση όταν χρειαστεί (ελευθερώνει μνήμη)
         return self.get_state()
+
+    # ------------------------------------------------------------ τοπικό μοντέλο (1.8.0)
+
+    def local_state(self) -> dict:
+        from . import local_llm
+
+        return {"models": local_llm.catalog_view(), "selected": self._settings.local_model,
+                "engine": bool(local_llm.server_path()), "installing": self._local_job is not None,
+                "folder": str(local_llm.models_dir())}
+
+    def local_install(self, key: str) -> dict:
+        from . import local_llm
+
+        if key not in local_llm.CATALOG:
+            return {"ok": False, "error": "Άγνωστο μοντέλο."}
+        if self._local_job is not None:
+            return {"ok": False, "error": "Μια λήψη είναι ήδη σε εξέλιξη."}
+        cancel = threading.Event()
+        self._local_job = cancel
+
+        def work():
+            last = [0.0]
+
+            def progress(done, total, name):
+                now = time.monotonic()
+                if now - last[0] > 0.4 or done >= total:
+                    last[0] = now
+                    self.emit("local_progress", {"key": key, "done": done, "total": total, "file": name,
+                                                 "status": "downloading"})
+            try:
+                local_llm.install(key, progress, cancel)
+                self.emit("local_progress", {"key": key, "status": "done", "state": self.local_state()})
+            except Exception as exc:  # noqa: BLE001
+                self.emit("local_progress", {"key": key, "status": "error", "error": str(exc),
+                                             "state": self.local_state()})
+            finally:
+                self._local_job = None
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True}
+
+    def local_cancel(self) -> dict:
+        if self._local_job is not None:
+            self._local_job.set()
+        return {"ok": True}
+
+    def local_remove(self, key: str) -> dict:
+        from . import local_llm
+
+        if key not in local_llm.CATALOG:
+            return {"ok": False, "error": "Άγνωστο μοντέλο."}
+        try:
+            local_llm.remove(key)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "state": self.local_state()}
 
     def set_secret(self, kind: str, value: str) -> dict:
         name = {"oauth": SECRET_OAUTH, "api_key": SECRET_API_KEY}.get(kind)
@@ -233,6 +314,8 @@ class Api:
         try:
             provider = get_provider(self._settings)
             text = asyncio.run(provider.ping())
+            if self._settings.provider == "local":
+                return {"ok": True, "message": f"Λειτουργεί: {text}"}
             return {"ok": True, "message": f"Η σύνδεση λειτουργεί ({self._settings.provider}, {self._settings.model}): {text}"}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
@@ -378,20 +461,44 @@ class Api:
                 self.emit("transcribed", {"job_id": job_id, "error": str(exc)})
             return
 
+        pages_of = dict(jobs)
+
         def done(job_id, result, error):
             if result is not None:
                 fig = result.get("figure")
                 if fig:
-                    result["figure_render"] = self._render(job_id, fig.get("spec_json", ""))
+                    result["figure_render"] = self._figure_view(job_id, fig, pages_of.get(job_id) or [])
             self.emit("transcribed", {"job_id": job_id, "result": result, "error": error})
 
         try:
             asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done,
-                                        check_figures=bool(self._settings.figure_check)))
+                                        check_figures=self._check_figures()))
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             for job_id, _ in jobs:
                 self.emit("transcribed", {"job_id": job_id, "error": f"Απρόσμενο σφάλμα: {exc}"})
+
+    def _check_figures(self) -> bool:
+        """Δεύτερος έλεγχος σχημάτων: όχι με τοπικό μοντέλο χωρίς Claude (δεν υπάρχουν επανασχεδιασμένα σχήματα)."""
+        s = self._settings
+        return bool(s.figure_check) and not (s.provider == "local" and not s.local_hybrid)
+
+    def _figure_view(self, key: str, fig: dict, pages: list[bytes]) -> dict:
+        """Επανασχεδίαση· ή, αν το σχήμα μπήκε ως πρωτότυπη εικόνα (τοπικό μοντέλο), η περικοπή του."""
+        if fig.get("use_original") and pages:
+            from .figures import crop_original
+
+            page = pages[min(max(0, int(fig.get("crop_page") or 0)), len(pages) - 1)]
+            out = self._session_dir / f"crop_{key}_{uuid.uuid4().hex[:6]}.png"
+            try:
+                info = crop_original(page, fig.get("crop") or [0, 0, 1, 1], out)
+                info["png_data"] = _data_url(info["png"])
+                info["error"] = None
+                info["original"] = True
+                return info
+            except Exception as exc:  # noqa: BLE001
+                return {"error": f"Η περικοπή του σχήματος απέτυχε: {exc}", "original": True}
+        return self._render(key, fig.get("spec_json", ""))
 
     # ------------------------------------------------------------ σχήματα
 
@@ -414,13 +521,15 @@ class Api:
 
     def _figure_call(self, image_ids: list[str], make) -> dict:
         """Κοινό μέρος για «σχήμα από την εικόνα» και «νέος έλεγχος»: σελίδες, σύνδεση, σφάλματα."""
-        from .providers import ProviderError, get_provider
+        from .providers import ProviderError, get_claude_provider, get_provider
 
         pages = [self._images[i].read_bytes() for i in (image_ids or []) if i in self._images]
         if not pages:
             return {"error": "Δεν βρέθηκαν οι εικόνες της άσκησης."}
         try:
-            provider = get_provider(self._settings)
+            s = self._settings
+            # με τοπικό μοντέλο, ό,τι ζητηθεί ρητά για σχήμα το κάνει ο Claude (με τη σύνδεση της μικτής λειτουργίας)
+            provider = get_claude_provider(s, s.local_claude) if s.provider == "local" else get_provider(s)
             return asyncio.run(make(provider, pages))
         except ProviderError as exc:
             return {"error": str(exc)}
@@ -617,6 +726,12 @@ class Api:
         # το πρόγραμμα εγκατάστασης θα αντικαταστήσει τα αρχεία: κλείνουμε
         def _quit():
             try:
+                from . import local_llm
+
+                local_llm.stop()  # αλλιώς το llama-server.exe μένει ανοιχτό και η εγκατάσταση δεν το αντικαθιστά
+            except Exception:  # noqa: BLE001
+                pass
+            try:
                 if self._window is not None:
                     self._window.destroy()
             finally:
@@ -729,16 +844,18 @@ class Api:
                 self.emit("corpus_transcribed", {"job_id": job_id, "error": str(exc)})
             return
 
+        pages_of = dict(jobs)
+
         def done(job_id, result, error):
             if result is not None:
                 for k, ex in enumerate(result):
                     if ex.get("figure"):
-                        ex["figure_render"] = self._render(f"{job_id}_{k}", ex["figure"].get("spec_json", ""))
+                        ex["figure_render"] = self._figure_view(f"{job_id}_{k}", ex["figure"], pages_of.get(job_id) or [])
             self.emit("corpus_transcribed", {"job_id": job_id, "result": result, "error": error})
 
         try:
             asyncio.run(transcribe_many(provider, jobs, self._settings.max_parallel, done, corpus=True,
-                                        check_figures=bool(self._settings.figure_check)))
+                                        check_figures=self._check_figures()))
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             for job_id, _ in jobs:

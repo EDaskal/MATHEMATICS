@@ -60,6 +60,7 @@ window.__onPyEvent = (payload) => {
   if (payload.event === "phone_pdf") onPhonePdf(payload.data);
   if (payload.event === "usage") renderUsage(payload.data);
   if (payload.event === "update_progress") onUpdateProgress(payload.data);
+  if (payload.event === "local_progress") onLocalProgress(payload.data);
 };
 
 /* ------------------------------------------------------------------ κατάσταση */
@@ -451,6 +452,13 @@ function renderUsageChip(st) {
   const nowSec = Date.now() / 1000;
   chip.innerHTML = "";
   chip.className = "usage-chip";
+  if (st.provider === "local") {
+    chip.append(el("span", { text: "💻 Τοπικό μοντέλο" }));
+    chip.title = "Οι ασκήσεις διαβάζονται στον υπολογιστή με το τοπικό μοντέλο· δεν χρησιμοποιείται ο Claude.";
+    chip.hidden = false;
+    return;
+  }
+  if (st.local) chip.append(el("span", { text: "💻 +", title: "Μικτή λειτουργία: κείμενο τοπικά, σχήματα με τον Claude" }));
   if (st.provider === "api") {
     const t = st.today || {};
     chip.append(el("span", { text: `API · σήμερα ${t.images || 0} ${t.images === 1 ? "εικόνα" : "εικόνες"}` }));
@@ -974,6 +982,7 @@ async function saveListValue(listName, inputSel) {
 async function startTranscription(exList) {
   const jobs = exList.filter((ex) => ex.pages.length).map((ex) => ({ job_id: ex.id, image_ids: ex.pages.map((p) => p.imageId) }));
   if (!jobs.length) return;
+  if (!(await localReadyOrAsk())) return;
   exList.forEach((ex) => { ex.status = "pending"; ex.error = null; });
   try {
     const res = await api.transcribe(jobs);
@@ -991,6 +1000,7 @@ async function onTranscribeClick() {
   const empty = S.exam.themes.map((t, i) => (t.exercises.length ? null : LETTERS[i])).filter(Boolean);
   if (empty.length && !confirm(`Τα θέματα ${empty.join(", ")} δεν έχουν εικόνα και θα παραλειφθούν. Συνέχεια;`)) return;
   const todo = all.filter((ex) => ex.status === "new" || ex.status === "error");
+  if (todo.length && !(await localReadyOrAsk())) return;
   switchTab("review");
   if (todo.length) await startTranscription(todo);
 }
@@ -1006,7 +1016,7 @@ async function onTranscribed({ job_id, result, error }) {
   } else {
     ex.status = "done";
     ex.data = result;
-    ex.fig = result.figure ? { mode: "redraw", render: result.figure_render || null, crop: null } : null;
+    ex.fig = figState(result.figure, result.figure_render);
     delete result.figure_render;
   }
   await syncItemPoints(t);
@@ -1186,6 +1196,12 @@ function figureCheckInfo(fig) {
 function figureToolsRow(ex, ids, rerender) {
   // Για άσκηση ΜΕ σχήμα: νέος έλεγχος, ή άλλο σχήμα από την εικόνα (π.χ. από τη λύση).
   const req = el("input", { type: "text", placeholder: "Ποιο σχήμα; π.χ. «το σχήμα της λύσης» (προαιρετικό)" });
+  if (!ex.data.figure?.spec_json) {  // 1.8.0: σχήμα ως πρωτότυπη εικόνα (τοπικό μοντέλο) → επανασχεδίαση κατ' απαίτηση
+    const redraw = el("button", { class: "btn small", text: "✏ Επανασχεδίαση με τον Claude",
+      title: "Ο Claude βρίσκει το σχήμα στην εικόνα και το ξανασχεδιάζει, επεξεργάσιμο στο Word. Χρειάζεται internet.",
+      onclick: () => figureFromImage(ex, ids, req.value || "", rerender, redraw) });
+    return el("div", { class: "fig-tools" }, el("div", { class: "row" }, req, redraw));
+  }
   const again = el("button", { class: "btn small", text: "🔍 Νέος έλεγχος με πλέγμα",
     title: "Ο Claude ξανακοιτά το σχήμα πάνω σε πλέγμα και διορθώνει θέσεις, φορές βελών και χρώματα",
     onclick: () => figureFromImage(ex, ids, null, rerender, again) });
@@ -1223,9 +1239,14 @@ function figureBox(t, tIdx, ex) {
 
   box.append(el("div", { class: "row" }, el("span", { class: "field-label", text: "Σχήμα" }),
     fig.confidence === "low" ? el("span", { class: "badge err", text: "αβέβαιη ανάγνωση — ελέγξτε το" }) : null));
-  box.append(el("div", { class: "radio-row" }, radio("redraw", "Επανασχεδιασμένο (επεξεργάσιμο στο Word)"), radio("original", "Πρωτότυπη εικόνα (περικοπή)")));
+  box.append(el("div", { class: "radio-row" }, fig.spec_json ? radio("redraw", "Επανασχεδιασμένο (επεξεργάσιμο στο Word)") : null, radio("original", "Πρωτότυπη εικόνα (περικοπή)")));
+  if (!fig.spec_json) box.append(originalHint());
   if (img) box.append(img);
   if (current && current.error) box.append(el("div", { class: "fig-warn", text: current.error }));
+  if (st.mode === "original" && !fig.spec_json) box.append(cropRow(fig, async () => {
+    st.crop = await api.crop_figure(ex.id, figurePage(ex).imageId, fig.crop);
+    rerender();
+  }));
   const sizeRow = figLabelRow(fig, st, ex.id, rerender);
   if (sizeRow) box.append(sizeRow);
   if (st.mode === "redraw" && current && current.warnings && current.warnings.length) {
@@ -1283,7 +1304,7 @@ function renderExercise(t, tIdx, ex) {
 
   if (ex.status === "pending" || ex.status === "new") {
     editor.append(el("div", { class: "pending" }, el("div", { class: "spinner" }),
-      ex.status === "new" ? "Αναμονή…" : `Ο Claude διαβάζει ${many ? `τις ${ex.pages.length} σελίδες` : "την εικόνα"}… (συνήθως 15–60 δευτερόλεπτα)`));
+      ex.status === "new" ? "Αναμονή…" : `${readerName()} διαβάζει ${many ? `τις ${ex.pages.length} σελίδες` : "την εικόνα"}… (${readerTime()})`));
     return card;
   }
   if (ex.status === "error") {
@@ -1302,6 +1323,7 @@ function renderExercise(t, tIdx, ex) {
   const refmap = refmapFor(t, tIdx, ex);
   const single = t.exercises.length === 1;
 
+  if (d.review) editor.append(reviewBanner(d));
   if (d.uncertain && d.uncertain.length) {
     editor.append(el("div", { class: "notes" }, el("b", { text: "Χρειάζεται έλεγχος:" }),
       el("ul", {}, ...d.uncertain.map((u) => el("li", { text: u })))));
@@ -1426,8 +1448,11 @@ function fillSettings() {
     pg.append(el("label", { class: s.provider === k ? "sel" : "" },
       el("input", { type: "radio", name: "prov", value: k, checked: s.provider === k, onchange: () => { s.provider = k; fillSettings(); } }), v));
   }
-  $("#s-agent").hidden = s.provider !== "agent_sdk";
-  $("#s-api").hidden = s.provider !== "api";
+  const claudeKind = s.provider === "local" ? (s.local_hybrid ? s.local_claude : null) : s.provider;
+  $("#s-agent").hidden = claudeKind !== "agent_sdk";
+  $("#s-api").hidden = claudeKind !== "api";
+  $("#s-claude-model").hidden = !claudeKind;
+  fillLocalSettings();
   const os = $("#s-oauth-status");
   os.textContent = st.has_oauth ? "✓ Υπάρχει αποθηκευμένο token συνδρομής." : "Δεν έχει αποθηκευτεί token. (Αν στον υπολογιστή υπάρχει ήδη σύνδεση Claude Code, θα χρησιμοποιηθεί αυτή.)";
   os.className = "status-line " + (st.has_oauth ? "ok" : "no");
@@ -1460,6 +1485,111 @@ function fillSettings() {
   $("#s-rules-status").textContent = st.rules_custom ? "Χρησιμοποιούνται δικοί σας κανόνες." : "Χρησιμοποιούνται οι αρχικοί κανόνες.";
   $("#s-version").textContent = `Έκδοση ${st.version}`;
   updateTemplateHint();
+}
+
+function openSettings() { fillSettings(); openModal("#settings"); }
+
+/* ---------- τοπικό μοντέλο (1.8.0) */
+const LOCAL = { state: null, progress: null };
+
+function isLocal() { return S.app?.settings?.provider === "local"; }
+function readerName() { return isLocal() ? "Το τοπικό μοντέλο" : "Ο Claude"; }
+function readerTime() { return isLocal() ? "περίπου ½–1½ λεπτό ανά σελίδα, ανάλογα με τον υπολογιστή" : "συνήθως 15–60 δευτερόλεπτα"; }
+
+function figState(fig, fr) {
+  if (!fig) return null;
+  if (fig.use_original) return { mode: "original", render: null, crop: fr || null };
+  return { mode: "redraw", render: fr || null, crop: null };
+}
+
+function reviewBanner(d) {
+  return el("div", { class: "review-banner" },
+    el("span", { class: "badge review", text: "Προς έλεγχο" }),
+    el("span", { class: "small", text: "Διαβάστηκε με το τοπικό μοντέλο. Συγκρίνετε με την εικόνα: συνήθως λείπουν τόνοι ή αλλάζει κάποιο σύμβολο." }),
+    el("button", { class: "btn small ghost", text: "✓ Ελέγχθηκε", title: "Κρύβει την ένδειξη", onclick: (e) => { d.review = false; e.target.closest(".review-banner").remove(); } }));
+}
+
+function originalHint() {
+  return el("div", { class: "small muted", text: "Το σχήμα μπήκε ως εικόνα από τη σελίδα. Αν η περικοπή δεν είναι σωστή, αλλάξτε τα «Όρια περικοπής». Για επεξεργάσιμο σχήμα πατήστε «✏ Επανασχεδίαση με τον Claude» (χρειάζεται internet)." });
+}
+
+async function loadLocalState() {
+  try { LOCAL.state = await api.local_state(); } catch (_) { LOCAL.state = null; }
+  fillLocalSettings();
+  return LOCAL.state;
+}
+
+function fmtMB(mb) { return mb >= 1000 ? `${(mb / 1000).toFixed(1).replace(".", ",")} GB` : `${mb} MB`; }
+
+function fillLocalSettings() {
+  const box = $("#s-local");
+  if (!box || !S.app) return;
+  const s = S.app.settings;
+  box.hidden = s.provider !== "local";
+  $("#s-local-hybrid").checked = s.local_hybrid !== false;
+  $("#s-local-claude").value = s.local_claude === "api" ? "api" : "agent_sdk";
+  $("#s-local-claude").disabled = !$("#s-local-hybrid").checked;
+  $("#s-local-threads").value = s.local_threads || 0;
+  const list = $("#s-local-models");
+  list.innerHTML = "";
+  const st = LOCAL.state;
+  if (!st) { list.append(el("div", { class: "small muted", text: "Φόρτωση…" })); if (s.provider === "local") loadLocalState(); return; }
+  $("#s-local-folder").textContent = st.folder;
+  $("#s-local-engine").hidden = st.engine;
+  for (const m of st.models) {
+    const sel = (s.local_model || "lightonocr2") === m.key;
+    const prog = LOCAL.progress && LOCAL.progress.key === m.key ? LOCAL.progress : null;
+    const status = m.installed ? el("span", { class: "status-line ok", text: `✓ Έτοιμο (${fmtMB(m.size_mb)})` })
+      : el("span", { class: "status-line no", text: m.have_mb ? `Μερική λήψη: ${fmtMB(m.have_mb)} από ${fmtMB(m.size_mb)}` : `Δεν έχει κατέβει (${fmtMB(m.size_mb)})` });
+    const actions = el("div", { class: "row" });
+    if (prog) {
+      const pct = prog.total ? Math.floor((prog.done / prog.total) * 100) : 0;
+      actions.append(el("div", { class: "lm-bar" }, el("div", { style: `width:${pct}%` })),
+        el("span", { class: "small", text: `${pct}% · ${fmtMB(Math.round(prog.done / 1e6))} από ${fmtMB(Math.round(prog.total / 1e6))}` }),
+        el("button", { class: "btn small ghost", text: "Ακύρωση", onclick: () => api.local_cancel() }));
+    } else if (!m.installed) {
+      actions.append(el("button", { class: "btn small", text: m.have_mb ? "Συνέχεια λήψης" : "Λήψη", disabled: !!st.installing,
+        onclick: () => localInstall(m.key) }));
+    } else {
+      actions.append(el("button", { class: "btn small ghost", text: "Διαγραφή", onclick: async () => {
+        if (!confirm(`Να διαγραφεί το μοντέλο «${m.short}» από τον υπολογιστή (${fmtMB(m.size_mb)});`)) return;
+        const r = await api.local_remove(m.key);
+        if (!r.ok) toast(r.error, true); else { LOCAL.state = r.state; fillLocalSettings(); }
+      } }));
+    }
+    list.append(el("label", { class: "lm" + (sel ? " sel" : "") },
+      el("input", { type: "radio", name: "lmodel", value: m.key, checked: sel, onchange: () => { s.local_model = m.key; fillLocalSettings(); } }),
+      el("div", {}, el("b", { text: m.title }), el("div", { class: "small muted", text: m.note }), status, actions)));
+  }
+}
+
+async function localInstall(key) {
+  const r = await api.local_install(key);
+  if (!r.ok) { toast(r.error, true); return; }
+  LOCAL.progress = { key, done: 0, total: 0 };
+  fillLocalSettings();
+}
+
+function onLocalProgress(d) {
+  if (d.status === "downloading") LOCAL.progress = d;
+  else {
+    LOCAL.progress = null;
+    if (d.state) LOCAL.state = d.state;
+    if (d.status === "done") toast("Το τοπικό μοντέλο κατέβηκε και είναι έτοιμο.");
+    if (d.status === "error") toast(d.error, true, 9000);
+  }
+  if (!$("#settings").hidden) fillLocalSettings();
+}
+
+/* Πριν από μεταγραφή με τοπικό μοντέλο: υπάρχει; αλλιώς άνοιγμα των Ρυθμίσεων. */
+async function localReadyOrAsk() {
+  if (!isLocal()) return true;
+  const st = await loadLocalState();
+  const m = st && st.models.find((x) => x.key === (S.app.settings.local_model || "lightonocr2"));
+  if (m && m.installed && st.engine) return true;
+  toast(st && !st.engine ? "Λείπει η μηχανή του τοπικού μοντέλου — εγκαταστήστε ξανά την εφαρμογή." : "Το τοπικό μοντέλο δεν έχει κατέβει ακόμα. Πατήστε «Λήψη» στις Ρυθμίσεις.", true, 8000);
+  openSettings();
+  return false;
 }
 
 /* ---------- γραμματοσειρές */
@@ -1540,6 +1670,10 @@ function collectSettings() {
     math_size: +$("#s-math-size").value || 12,
     figure_colors: $("#s-fig-colors").value,
     figure_check: $("#s-fig-check").checked,
+    local_model: s.local_model || "lightonocr2",
+    local_hybrid: $("#s-local-hybrid").checked,
+    local_claude: $("#s-local-claude").value,
+    local_threads: +$("#s-local-threads").value || 0,
     theme: $("#s-theme").value,
     check_updates: $("#s-check-updates").checked,
     update_repo: $("#s-repo").value.trim() || "EDaskal/MATHEMATICS",
@@ -1572,7 +1706,9 @@ function updateTemplateHint() {
 }
 
 function bindSettings() {
-  $("#btn-settings").onclick = () => { fillSettings(); openModal("#settings"); };
+  $("#btn-settings").onclick = () => openSettings();
+  $("#s-local-hybrid").onchange = () => { S.app.settings.local_hybrid = $("#s-local-hybrid").checked; fillSettings(); };
+  $("#s-local-claude").onchange = () => { S.app.settings.local_claude = $("#s-local-claude").value; fillSettings(); };
   $("#s-save").onclick = () => saveSettings(true);
   $("#s-setup-token").onclick = async () => {
     const r = await api.launch_setup_token();
@@ -2036,6 +2172,7 @@ async function corpusTranscribe(groups) {
   const C = S.corpus;
   if (!groups) groups = corpusGroups().filter((g) => g.some((im) => im.status === "new" || im.status === "error"));
   if (!groups.length) { toast("Δεν υπάρχουν νέες εικόνες για μεταγραφή."); return; }
+  if (!(await localReadyOrAsk())) return;
   const jobs = [];
   for (const g of groups) {
     const old = Object.values(C.jobs).find((j) => j.imageIds[0] === g[0].id);
@@ -2069,7 +2206,7 @@ function onCorpusTranscribed({ job_id, result, error }) {
     result.forEach((data, k) => {
       const fr = data.figure_render || null;
       delete data.figure_render;
-      C.exs.push({ id: newId(), jobId: job_id, k, data, fig: data.figure ? { mode: "redraw", render: fr, crop: null } : null });
+      C.exs.push({ id: newId(), jobId: job_id, k, data, fig: figState(data.figure, fr) });
     });
     if (!result.length) toast(`Στην εικόνα «${imgs[0]?.name || ""}» δεν βρέθηκε άσκηση.`, true, 6000);
     corpusResort();
@@ -2089,7 +2226,7 @@ function renderCorpusReview() {
   box.innerHTML = "";
   C.exs.forEach((ex, i) => box.append(renderCorpusExercise(ex, i)));
   if (pending) box.append(el("div", { class: "pending" }, el("div", { class: "spinner" }),
-    `Ο Claude διαβάζει ${pending} ${pending === 1 ? "εικόνα" : "εικόνες"}… (συνήθως 10–60 δευτερόλεπτα η καθεμία, παράλληλα)`));
+    `${readerName()} διαβάζει ${pending} ${pending === 1 ? "εικόνα" : "εικόνες"}… (${isLocal() ? "με τη σειρά, " + readerTime() + " η καθεμία" : "συνήθως 10–60 δευτερόλεπτα η καθεμία, παράλληλα"})`));
   const sec = corpusSection();
   $("#c-review-title").textContent = `3. Έλεγχος — ${C.exs.length} ${C.exs.length === 1 ? "άσκηση" : "ασκήσεις"}`;
   const placed = C.exs.filter((x) => x.place).length;
@@ -2118,7 +2255,8 @@ function corpusFigureBox(ex) {
     } }), text);
   box.append(el("div", { class: "row" }, el("span", { class: "field-label", text: "Σχήμα" }),
     fig.confidence === "low" ? el("span", { class: "badge err", text: "αβέβαιη ανάγνωση — ελέγξτε το" }) : null));
-  box.append(el("div", { class: "radio-row" }, radio("redraw", "Επανασχεδιασμένο"), radio("original", "Πρωτότυπη εικόνα (περικοπή)"), radio("none", "Χωρίς σχήμα")));
+  box.append(el("div", { class: "radio-row" }, fig.spec_json ? radio("redraw", "Επανασχεδιασμένο") : null, radio("original", "Πρωτότυπη εικόνα (περικοπή)"), radio("none", "Χωρίς σχήμα")));
+  if (!fig.spec_json) box.append(originalHint());
   if (current && current.png_data) box.append(el("img", { class: "fig-img", src: current.png_data, onclick: () => lightbox(current.png_data) }));
   if (current && current.error) box.append(el("div", { class: "fig-warn", text: current.error }));
   const sizeRow = figLabelRow(fig, st, ex.id, rerender);
@@ -2126,8 +2264,27 @@ function corpusFigureBox(ex) {
   box.append(el("div", { class: "small muted", text: fig.description }));
   const chk = figureCheckInfo(fig);
   if (chk) box.append(chk);
+  if (st.mode === "original" && page) box.append(cropRow(fig, async () => {
+    st.crop = await api.crop_figure(ex.id, page.imageId, fig.crop);
+    rerender();
+  }));
   box.append(figureToolsRow(ex, imgs.map((im) => im.imageId), rerender));
   return box;
+}
+
+/* 1.8.0: όρια περικοπής της πρωτότυπης εικόνας (π.χ. όταν το τοπικό μοντέλο εκτίμησε λάθος περιοχή) */
+function cropRow(fig, apply) {
+  const inp = el("input", { type: "text", class: "crop-inp", value: (fig.crop || [0, 0, 1, 1]).map((v) => (+v).toFixed(2)).join(", ") });
+  const set = async (vals) => { fig.crop = vals; await apply(); };
+  return el("details", { class: "crop-edit" },
+    el("summary", { class: "small", text: "Όρια περικοπής" }),
+    el("div", { class: "row" },
+      el("span", { class: "small", text: "[αριστερά, πάνω, δεξιά, κάτω] από 0 έως 1:" }), inp,
+      el("button", { class: "btn small", text: "Εφαρμογή", onclick: () => {
+        const v = inp.value.split(",").map((x) => parseFloat(x));
+        if (v.length === 4 && v.every((x) => !isNaN(x))) set(v); else toast("Γράψτε 4 αριθμούς, π.χ. 0.5, 0, 1, 1", true);
+      } }),
+      el("button", { class: "btn small ghost", text: "Όλη η σελίδα", onclick: () => set([0, 0, 1, 1]) })));
 }
 
 function renderCorpusExercise(ex, i) {
@@ -2179,6 +2336,7 @@ function renderCorpusExercise(ex, i) {
     if (top === "same") box.append(el("div", { class: "small muted", text: "Η άσκηση θα μπει κανονικά στο Word. Αν δεν τη θέλετε, πατήστε «Σύγκριση» → «Να μη μπει» ή το ✕ πάνω δεξιά." }));
     editor.append(box);
   }
+  if (d.review) editor.append(reviewBanner(d));
   if (d.uncertain && d.uncertain.length) {
     editor.append(el("div", { class: "notes" }, el("b", { text: "Χρειάζεται έλεγχος:" }),
       el("ul", {}, ...d.uncertain.map((u) => el("li", { text: u })))));

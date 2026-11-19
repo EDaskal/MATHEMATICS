@@ -21,6 +21,9 @@ concurrency:
 
 env:
   PANDOC_VERSION: "3.6.4"
+  # Μηχανή του τοπικού μοντέλου (1.8.0): συγκεκριμένη έκδοση της llama.cpp, χτίζεται εδώ από τον κώδικά της.
+  # Για αναβάθμιση αλλάζει μόνο αυτός ο αριθμός (tag «bNNNNN» στο github.com/ggml-org/llama.cpp).
+  LLAMA_TAG: "b12550"
 
 jobs:
   build:
@@ -49,6 +52,38 @@ jobs:
           New-Item -ItemType Directory -Force app/bin | Out-Null
           Get-ChildItem pandoc_tmp -Recurse -Filter pandoc.exe | Select-Object -First 1 | Copy-Item -Destination app/bin/pandoc.exe
           app/bin/pandoc.exe --version | Select-Object -First 1
+
+      - name: Μηχανή τοπικού μοντέλου — αποθηκευμένη από προηγούμενο build
+        id: llama-cache
+        uses: actions/cache@v5
+        with:
+          path: llama_bin
+          key: llama-${{ env.LLAMA_TAG }}-win-cpu-v1
+
+      - name: Μηχανή τοπικού μοντέλου (llama.cpp → llama-server.exe)
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:LLAMA_TAG https://github.com/ggml-org/llama.cpp llama_src
+          # GGML_BACKEND_DL + παραλλαγές CPU: σε κάθε υπολογιστή φορτώνεται η ταχύτερη που υποστηρίζει ο επεξεργαστής
+          cmake -S llama_src -B llama_build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON `
+            -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build llama_build --config Release -j 4 --target llama-server ggml-cpu-x64 ggml-cpu-sse42 `
+            ggml-cpu-sandybridge ggml-cpu-haswell ggml-cpu-skylakex ggml-cpu-icelake ggml-cpu-alderlake ggml-cpu-zen4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force llama_bin | Out-Null
+          Get-ChildItem llama_build/bin -Recurse -Include llama-server.exe, *.dll | Copy-Item -Destination llama_bin
+          Copy-Item llama_src/LICENSE llama_bin/LICENSE-llama.cpp.txt
+          Get-ChildItem llama_bin | Format-Table Name, Length
+
+      - name: Μηχανή τοπικού μοντέλου στην εφαρμογή
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force app/bin/llama | Out-Null
+          Copy-Item llama_bin/* app/bin/llama/
+          app/bin/llama/llama-server.exe --version
+          if (-not (Test-Path app/bin/llama/llama-server.exe)) { Write-Error "Λείπει το llama-server.exe"; exit 1 }
 
       - name: Δοκιμές
         run: python -m pytest -q

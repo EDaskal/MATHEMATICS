@@ -500,3 +500,22 @@ label.check.wrap > span { flex-basis: 100%; font-weight: 400; }
 .fig-checked .muted { color: var(--muted, #777); }
 .upd-err-actions { margin-top: 8px; gap: 6px; flex-wrap: wrap; }
 .upd-diag { margin-top: 8px; display: grid; gap: 3px; word-break: break-word; }
+
+/* ---------- 1.8.0: τοπικό μοντέλο */
+.lm-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.lm { display: flex; flex-direction: row; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; cursor: pointer; font-weight: 400; }
+.lm.sel { border-color: var(--accent); background: var(--accent-soft); }
+.lm input { margin-top: 3px; }
+.lm .row { margin-top: 6px; align-items: center; }
+.lm .status-line { margin-top: 4px; display: block; }
+.lm-bar { width: 180px; height: 8px; border-radius: 99px; background: var(--hover); overflow: hidden; }
+.lm-bar > div { height: 100%; background: var(--accent); transition: width .3s; }
+#s-local label.check { align-self: auto; align-items: flex-start; margin: 8px 0 4px; }
+#s-local label.check input { margin-top: 3px; }
+.review-banner { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 10px; margin-bottom: 8px;
+  border: 1px dashed var(--warn); border-radius: 8px; background: var(--warn-soft); }
+.badge.review { background: var(--warn); color: #fff; font-weight: 600; }
+.uc-local { color: var(--muted); }
+.crop-edit { margin: 6px 0; }
+.crop-edit .crop-inp { width: 170px; }
