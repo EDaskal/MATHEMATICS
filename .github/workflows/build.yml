@@ -69,8 +69,9 @@ jobs:
           cmake -S llama_src -B llama_build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON `
             -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build llama_build --config Release -j 4 --target llama-server ggml-cpu-x64 ggml-cpu-sse42 `
-            ggml-cpu-sandybridge ggml-cpu-haswell ggml-cpu-skylakex ggml-cpu-icelake ggml-cpu-alderlake ggml-cpu-zen4
+          # οι παραλλαγές CPU (ggml-cpu-*.dll) χτίζονται αυτόματα μαζί με το llama-server· όχι ρητή λίστα, γιατί
+          # δεν υπάρχουν όλες σε κάθε μεταγλωττιστή (π.χ. η zen4 λείπει στο MSVC των Windows)
+          cmake --build llama_build --config Release -j 4 --target llama-server
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force llama_bin | Out-Null
           Get-ChildItem llama_build/bin -Recurse -Include llama-server.exe, *.dll | Copy-Item -Destination llama_bin
